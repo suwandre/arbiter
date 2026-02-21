@@ -3,6 +3,7 @@ use crate::errors::ExchangeError;
 use crate::models::FundingRate;
 
 pub mod binance;
+pub mod bybit;
 
 #[async_trait]
 pub trait Exchange: Send + Sync {
