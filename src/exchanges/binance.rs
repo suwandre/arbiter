@@ -13,7 +13,7 @@ struct PremiumIndexResponse {
     last_funding_rate: String,
 
     #[serde(rename = "nextFundingTime")]
-    next_funding_time: String,
+    next_funding_time: u64,
 }
 
 pub struct Binance {
@@ -55,10 +55,7 @@ impl Exchange for Binance {
             .parse::<f64>()
             .map_err(|e| ExchangeError::UnexpectedData(e.to_string()))?;
 
-        let next_funding_ms = response
-            .next_funding_time
-            .parse::<u64>()
-            .map_err(|e| ExchangeError::UnexpectedData(e.to_string()))?;
+        let next_funding_ms = response.next_funding_time;
 
         Ok(FundingRate {
             exchange: self.name(),
