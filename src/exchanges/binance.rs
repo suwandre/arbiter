@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use super::Exchange;
 use crate::errors::ExchangeError;
 use crate::models::FundingRate;
@@ -5,6 +7,7 @@ use crate::orderbook::OrderBook;
 use crate::{config::Config, orderbook::OrderBookStore};
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
+use ordered_float::OrderedFloat;
 use serde::Deserialize;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
@@ -18,6 +21,27 @@ struct PremiumIndexResponse {
 
     #[serde(rename = "nextFundingTime")]
     next_funding_time: u64,
+}
+
+/// Wrapper around a single depth update message from Binance's
+/// order book WebSocket. The actual data is nested under "data".
+#[derive(Debug, Deserialize)]
+struct DepthUpdate {
+    #[serde(rename = "data")]
+    data: DepthData,
+}
+
+/// The actual order book delta data inside each WebSocket message.
+/// Contains the new bid/ask levels and the event timestamp.
+#[derive(Debug, Deserialize)]
+struct DepthData {
+    #[serde(rename = "E")]
+    E: u64, // event time
+    s: String, // symbol
+    #[serde(rename = "b")]
+    b: Vec<[String; 2]>, // bids
+    #[serde(rename = "a")]
+    a: Vec<[String; 2]>, // asks
 }
 
 pub struct Binance {
@@ -55,7 +79,49 @@ async fn stream_pair(
         let msg = msg.map_err(|e| ExchangeError::WebSocket(e.to_string()))?;
 
         if let Message::Text(text) = msg {
-            tracing::debug!("[{name}] {pair} raw: {}", text);
+            // parse "data" field out of the stream wrapper
+            let depth_update: DepthUpdate =
+                serde_json::from_str(&text).map_err(|e| ExchangeError::Parse(e))?;
+
+            let mut orderbook = OrderBook {
+                exchange: name,
+                pair: depth_update.data.s.clone(),
+                bids: BTreeMap::new(),
+                asks: BTreeMap::new(),
+                updated_ms: depth_update.data.E,
+            };
+
+            // Parse bids (BTree keeps ascending, so highest bid will be in the last position)
+            for [price_str, qty_str] in depth_update.data.b {
+                let price = price_str
+                    .parse::<f64>()
+                    .map_err(|_| ExchangeError::UnexpectedData("invalid bid price".to_string()))?;
+                let qty = qty_str.parse::<f64>().map_err(|_| {
+                    ExchangeError::UnexpectedData("invalid bid quantity".to_string())
+                })?;
+
+                orderbook.bids.insert(OrderedFloat(price), qty);
+            }
+
+            // Parse asks (BTree keeps ascending, so lowest ask is already in the first position)
+            for [price_str, qty_str] in depth_update.data.a {
+                let price = price_str
+                    .parse::<f64>()
+                    .map_err(|_| ExchangeError::UnexpectedData("invalid ask price".to_string()))?;
+                let qty = qty_str.parse::<f64>().map_err(|_| {
+                    ExchangeError::UnexpectedData("invalid ask quantity".to_string())
+                })?;
+
+                orderbook.asks.insert(OrderedFloat(price), qty);
+            }
+
+            store.update(orderbook.clone());
+            tracing::debug!(
+                "[{name}] {} bids: {} asks: {}",
+                depth_update.data.s,
+                orderbook.bids.len(),
+                orderbook.asks.len()
+            );
         }
     }
 

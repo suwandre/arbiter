@@ -1,6 +1,8 @@
 use super::Exchange;
+use crate::config::Config;
 use crate::errors::ExchangeError;
 use crate::models::FundingRate;
+use crate::OrderBookStore;
 use async_trait::async_trait;
 use serde::Deserialize;
 
@@ -90,5 +92,15 @@ impl Exchange for Bybit {
             rate,
             next_funding_ms,
         })
+    }
+
+    /// TODO: Implement Bybit order book WebSocket stream
+    async fn run_orderbook_stream(
+        &self,
+        _config: &Config,
+        _store: OrderBookStore,
+    ) -> Result<(), ExchangeError> {
+        tracing::warn!("[{}] Order book streaming not implemented yet", self.name());
+        Ok(())
     }
 }
