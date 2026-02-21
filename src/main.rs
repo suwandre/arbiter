@@ -1,3 +1,7 @@
+mod exchanges;
+mod errors;
+mod models;
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
