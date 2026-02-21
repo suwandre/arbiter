@@ -1,6 +1,7 @@
 mod exchanges;
 mod errors;
 mod models;
+mod orderbook;
 
 #[tokio::main]
 async fn main() {
