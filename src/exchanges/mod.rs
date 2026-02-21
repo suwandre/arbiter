@@ -2,6 +2,8 @@ use async_trait::async_trait;
 use crate::errors::ExchangeError;
 use crate::models::FundingRate;
 
+pub mod binance;
+
 #[async_trait]
 pub trait Exchange: Send + Sync {
     fn name(&self) -> &'static str;
