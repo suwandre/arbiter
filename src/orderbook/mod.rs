@@ -2,6 +2,7 @@ pub mod store;
 
 use ordered_float::OrderedFloat;
 use std::collections::BTreeMap;
+pub use store::OrderBookStore;
 
 #[derive(Debug, Clone)]
 pub struct OrderBook {

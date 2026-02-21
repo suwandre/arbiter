@@ -5,9 +5,9 @@ mod models;
 mod orderbook;
 
 use config::Config;
-use exchanges::Exchange;
 use exchanges::binance::Binance;
 use exchanges::bybit::Bybit;
+use exchanges::Exchange;
 use orderbook::store::OrderBookStore;
 
 #[tokio::main]
@@ -25,7 +25,7 @@ async fn main() {
                 fr.exchange,
                 fr.rate * 100.0
             ),
-            Err(e) => tracing::error!("[{}] Failed: {}", ex.name(), e)
+            Err(e) => tracing::error!("[{}] Failed: {}", ex.name(), e),
         }
     }
 
