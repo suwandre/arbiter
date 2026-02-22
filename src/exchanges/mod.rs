@@ -13,7 +13,7 @@ pub trait Exchange: Send + Sync {
 
     async fn fetch_funding_rate(&self, pair: &str) -> Result<FundingRate, ExchangeError>;
 
-    /// Spawn a tokio task that connects to this exchange's order book Websocket 
+    /// Spawn a tokio task that connects to this exchange's order book Websocket
     /// and continuously updates the store.
     async fn run_orderbook_stream(
         &self,

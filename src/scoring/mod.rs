@@ -53,7 +53,7 @@ impl ScoringEngine {
     /// at least 4 significant digits, regardless of magnitude.
     /// e.g. 68074.30 → "68074.30", 0.00002341 → "0.00002341".
     /// This helps tickers with smaller prices to not show as "0.0".
-    fn format_price(price: f64) -> String {
+    pub fn format_price(price: f64) -> String {
         if price == 0.0 {
             return "0.00".to_string();
         }

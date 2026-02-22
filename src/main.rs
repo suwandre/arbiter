@@ -62,11 +62,11 @@ async fn main() {
             tracing::info!("=== TOP OPPORTUNITIES ===");
             for score in scores.iter().take(5) {
                 tracing::info!(
-                    "[{}] {}: bid=${:.3} ask=${:.3} spread={:.6}% score={:.2}",
+                    "[{}] {}: bid=${} ask=${} spread={:.6}% score={:.1}",
                     score.exchange,
                     score.pair,
-                    score.best_bid,
-                    score.best_ask,
+                    ScoringEngine::format_price(score.best_bid),
+                    ScoringEngine::format_price(score.best_ask),
                     score.spread_pct,
                     score.score
                 );
