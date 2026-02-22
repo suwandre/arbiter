@@ -23,25 +23,25 @@ struct PremiumIndexResponse {
     next_funding_time: u64,
 }
 
-/// Wrapper around a single depth update message from Binance's
-/// order book WebSocket. The actual data is nested under "data".
-#[derive(Debug, Deserialize)]
-struct DepthUpdate {
-    #[serde(rename = "data")]
-    data: DepthData,
-}
-
-/// The actual order book delta data inside each WebSocket message.
-/// Contains the new bid/ask levels and the event timestamp.
+/// Raw order book delta message sent directly by Binance's
+/// single-stream WebSocket endpoint. No outer wrapper present.
 #[derive(Debug, Deserialize)]
 struct DepthData {
+    /// Event timestamp in milliseconds
     #[serde(rename = "E")]
-    E: u64, // event time
-    s: String, // symbol
+    event_time: u64,
+
+    /// Trading pair symbol e.g. "BTCUSDT"
+    #[serde(rename = "s")]
+    symbol: String,
+
+    /// Bid levels: [[price, quantity], ...]
     #[serde(rename = "b")]
-    b: Vec<[String; 2]>, // bids
+    bids: Vec<[String; 2]>,
+
+    /// Ask levels: [[price, quantity], ...]
     #[serde(rename = "a")]
-    a: Vec<[String; 2]>, // asks
+    asks: Vec<[String; 2]>,
 }
 
 pub struct Binance {
@@ -79,46 +79,40 @@ async fn stream_pair(
         let msg = msg.map_err(|e| ExchangeError::WebSocket(e.to_string()))?;
 
         if let Message::Text(text) = msg {
-            // parse "data" field out of the stream wrapper
-            let depth_update: DepthUpdate =
-                serde_json::from_str(&text).map_err(|e| ExchangeError::Parse(e))?;
+            let depth: DepthData = match serde_json::from_str(&text) {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::warn!("[{name}] parse error: {e} — raw: {text}");
+                    continue; // skip this message, keep stream alive
+                }
+            };
 
             let mut orderbook = OrderBook {
                 exchange: name,
-                pair: depth_update.data.s.clone(),
+                pair: depth.symbol.clone(),
                 bids: BTreeMap::new(),
                 asks: BTreeMap::new(),
-                updated_ms: depth_update.data.E,
+                updated_ms: depth.event_time,
             };
 
             // Parse bids (BTree keeps ascending, so highest bid will be in the last position)
-            for [price_str, qty_str] in depth_update.data.b {
-                let price = price_str
-                    .parse::<f64>()
-                    .map_err(|_| ExchangeError::UnexpectedData("invalid bid price".to_string()))?;
-                let qty = qty_str.parse::<f64>().map_err(|_| {
-                    ExchangeError::UnexpectedData("invalid bid quantity".to_string())
-                })?;
-
+            for [price_str, qty_str] in depth.bids {
+                let price = price_str.parse::<f64>().unwrap_or(0.0);
+                let qty = qty_str.parse::<f64>().unwrap_or(0.0);
                 orderbook.bids.insert(OrderedFloat(price), qty);
             }
 
             // Parse asks (BTree keeps ascending, so lowest ask is already in the first position)
-            for [price_str, qty_str] in depth_update.data.a {
-                let price = price_str
-                    .parse::<f64>()
-                    .map_err(|_| ExchangeError::UnexpectedData("invalid ask price".to_string()))?;
-                let qty = qty_str.parse::<f64>().map_err(|_| {
-                    ExchangeError::UnexpectedData("invalid ask quantity".to_string())
-                })?;
-
+            for [price_str, qty_str] in depth.asks {
+                let price = price_str.parse::<f64>().unwrap_or(0.0);
+                let qty = qty_str.parse::<f64>().unwrap_or(0.0);
                 orderbook.asks.insert(OrderedFloat(price), qty);
             }
 
             store.update(orderbook.clone());
             tracing::debug!(
                 "[{name}] {} bids: {} asks: {}",
-                depth_update.data.s,
+                orderbook.pair,
                 orderbook.bids.len(),
                 orderbook.asks.len()
             );
