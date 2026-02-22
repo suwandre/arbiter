@@ -29,4 +29,27 @@ impl ApiServer {
 
         Ok(())
     }
+
+    /// Broadcast version: multiple receivers can subscribe
+    pub async fn run_with_broadcast(
+        self,
+        config: Config,
+        mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+    ) -> anyhow::Result<()> {
+        let app = router::build(Arc::clone(&self.engine));
+        let addr = SocketAddr::from(([0, 0, 0, 0], config.api_port));
+
+        tracing::info!("API server listening on http://{}", addr);
+
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                // broadcast::recv() returns Result, ignore errors
+                let _ = shutdown_rx.recv().await;
+            })
+            .await?;
+
+        Ok(())
+    }
 }
