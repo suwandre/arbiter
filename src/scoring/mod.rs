@@ -48,4 +48,27 @@ impl ScoringEngine {
         scores.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
         scores
     }
+
+    /// Formats a price with enough decimal places to always show
+    /// at least 4 significant digits, regardless of magnitude.
+    /// e.g. 68074.30 → "68074.30", 0.00002341 → "0.00002341".
+    /// This helps tickers with smaller prices to not show as "0.0".
+    fn format_price(price: f64) -> String {
+        if price == 0.0 {
+            return "0.00".to_string();
+        }
+
+        // How many decimal places until we hit the first significant digit
+        let magnitude = -price.log10().floor() as i32;
+
+        // For prices >= $1: always show 2 dp (e.g. $68074.30)
+        // For prices < $1: show enough dp to expose 4 significant digits
+        let decimals = if magnitude < 0 {
+            2
+        } else {
+            (magnitude + 4) as usize
+        };
+
+        format!("{:.prec$}", price, prec = decimals)
+    }
 }
