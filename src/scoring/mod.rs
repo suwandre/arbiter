@@ -1,10 +1,11 @@
 use crate::config::Config;
 use crate::orderbook::{OrderBook, OrderBookStore};
+use serde::Serialize;
 use std::collections::HashMap;
 
 /// Composite score for a given pair across all exchanges.
 /// Higher = better opportunity (negative funding + tight spreads).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ExchangeScore {
     pub exchange: String,
     pub pair: String,
