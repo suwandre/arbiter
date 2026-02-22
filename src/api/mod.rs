@@ -13,10 +13,8 @@ pub struct ApiServer {
 
 impl ApiServer {
     /// Wraps the scoring engine in an Arc for shared handler access.
-    pub fn new(engine: ScoringEngine) -> Self {
-        Self {
-            engine: Arc::new(engine),
-        }
+    pub fn new(engine: Arc<ScoringEngine>) -> Self {
+        Self { engine }
     }
 
     /// Binds the server to the configured port and starts serving.
