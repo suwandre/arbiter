@@ -1,0 +1,33 @@
+# Environment variables — never commit secrets
+.env
+.env.local
+.env.*.local
+
+# Go build output
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/bin/
+/dist/
+
+# Go test cache and coverage
+*.test
+*.out
+coverage.html
+
+# Go module download cache (global, not project-level)
+# Note: go.sum SHOULD be committed — it's your lockfile
+vendor/
+
+# IDE/editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Air live reload temp files
+tmp/
