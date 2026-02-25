@@ -16,6 +16,7 @@ type Scheduler struct {
 	cache    map[string][]*models.ExchangeScore
 	mu       sync.RWMutex
 	stopCh   chan struct{}
+	wg       sync.WaitGroup // A wait group to ensure that the goroutine finishes executing before `stopCh` is closed.
 }
 
 func NewScheduler(scorer *scorer.Scorer, pairs []string, interval time.Duration) *Scheduler {
@@ -33,7 +34,10 @@ func (s *Scheduler) Start() {
 	// Run once immediately so cache isn't empty on first request
 	s.refresh()
 
+	s.wg.Add(1)
 	go func() {
+		// signals when goroutine exists.
+		defer s.wg.Done()
 		ticker := time.NewTicker(s.interval)
 		defer ticker.Stop()
 
@@ -57,6 +61,10 @@ func (s *Scheduler) Start() {
 // Signals the background goroutine to exit cleanly.
 func (s *Scheduler) Stop() {
 	close(s.stopCh)
+	// blocks until the goroutine fully exits.
+	// if refresh() is running midway when main() exits, Stop() is blocked until the goroutine finishes,
+	// ensuring that the HTTP request finishes and the cache is updated before the goroutine exits.
+	s.wg.Wait()
 }
 
 // Returns the latest cached scores for a pair.

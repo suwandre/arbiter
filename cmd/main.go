@@ -12,6 +12,7 @@ import (
 	"github.com/suwandre/arbiter/api"
 	"github.com/suwandre/arbiter/config"
 	"github.com/suwandre/arbiter/internal/exchange"
+	"github.com/suwandre/arbiter/internal/scheduler"
 	"github.com/suwandre/arbiter/internal/scorer"
 )
 
@@ -31,8 +32,18 @@ func main() {
 	}
 	log.Info().Int("count", len(exchanges)).Msg("exchange adapters initialized")
 
-	// ── 4. Scorer ─────────────────────────────────────────────────
+	// ── 4. Scheduler ──────────────────────────────────────────────
 	sc := scorer.NewScorer(exchanges)
+
+	sched := scheduler.NewScheduler(sc, []string{
+		"BTCUSDT",
+		"ETHUSDT",
+		"SOLUSDT",
+	}, 10*time.Second)
+
+	sched.Start()
+	// scheduler goroutine will get killed when main() exists
+	defer sched.Stop()
 
 	// ── 5. Fiber app ──────────────────────────────────────────────
 	app := fiber.New(fiber.Config{
@@ -42,7 +53,7 @@ func main() {
 	})
 
 	// ── 6. Routes ─────────────────────────────────────────────────
-	api.SetupRoutes(app, sc)
+	api.SetupRoutes(app, sched)
 
 	// ── 7. Graceful shutdown ──────────────────────────────────────
 	quit := make(chan os.Signal, 1)

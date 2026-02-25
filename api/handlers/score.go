@@ -3,15 +3,15 @@ package handlers
 import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/rs/zerolog/log"
-	"github.com/suwandre/arbiter/internal/scorer"
+	"github.com/suwandre/arbiter/internal/scheduler"
 )
 
 type ScoreHandler struct {
-	scorer *scorer.Scorer
+	scheduler *scheduler.Scheduler
 }
 
-func NewScoreHandler(scorer *scorer.Scorer) *ScoreHandler {
-	return &ScoreHandler{scorer: scorer}
+func NewScoreHandler(scheduler *scheduler.Scheduler) *ScoreHandler {
+	return &ScoreHandler{scheduler}
 }
 
 // Handles GET /scores/:pair.
@@ -28,15 +28,12 @@ func (h *ScoreHandler) GetScores(c fiber.Ctx) error {
 		Str("pair", pair).
 		Msg("fetching scores")
 
-	scores, err := h.scorer.ScoreAll(pair)
-	if err != nil {
-		log.Error().
-			Err(err).
-			Str("pair", pair).
-			Msg("failed to score exchanges")
+	scores, ok := h.scheduler.GetScores(pair)
 
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": err.Error(),
+	if !ok {
+		log.Warn().Str("pair", pair).Msg("pair not found in cache")
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error": "pair not available, check configured pairs",
 		})
 	}
 
