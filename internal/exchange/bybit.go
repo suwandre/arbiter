@@ -1,6 +1,7 @@
 package exchange
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,13 +30,18 @@ func (b *BybitAdapter) Name() string {
 	return "bybit"
 }
 
-func (b *BybitAdapter) GetFundingRate(pair string) (*models.FundingRate, error) {
+func (b *BybitAdapter) GetFundingRate(ctx context.Context, pair string) (*models.FundingRate, error) {
 	url := fmt.Sprintf(
 		"https://api.bybit.com/v5/market/funding/history?category=linear&symbol=%s&limit=1",
 		pair,
 	)
 
-	resp, err := b.httpClient.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("bybit funding rate: failed to build request: %w", err)
+	}
+
+	resp, err := b.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("bybit funding rate request failed: %w", err)
 	}
@@ -91,13 +97,18 @@ func (b *BybitAdapter) GetFundingRate(pair string) (*models.FundingRate, error) 
 	}, nil
 }
 
-func (b *BybitAdapter) GetSpread(pair string) (*models.Spread, error) {
+func (b *BybitAdapter) GetSpread(ctx context.Context, pair string) (*models.Spread, error) {
 	url := fmt.Sprintf(
 		"https://api.bybit.com/v5/market/tickers?category=linear&symbol=%s",
 		pair,
 	)
 
-	resp, err := b.httpClient.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("bybit spread: failed to build request: %w", err)
+	}
+
+	resp, err := b.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("bybit spread request failed: %w", err)
 	}
@@ -144,13 +155,18 @@ func (b *BybitAdapter) GetSpread(pair string) (*models.Spread, error) {
 	}, nil
 }
 
-func (b *BybitAdapter) GetOrderBookDepth(pair string) (*models.OrderBookDepth, error) {
+func (b *BybitAdapter) GetOrderBookDepth(ctx context.Context, pair string) (*models.OrderBookDepth, error) {
 	url := fmt.Sprintf(
 		"https://api.bybit.com/v5/market/orderbook?category=linear&symbol=%s&limit=5",
 		pair,
 	)
 
-	resp, err := b.httpClient.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("bybit depth: failed to build request: %w", err)
+	}
+
+	resp, err := b.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("bybit depth request failed: %w", err)
 	}

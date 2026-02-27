@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -15,8 +16,8 @@ type Scheduler struct {
 	interval time.Duration
 	cache    map[string][]*models.ExchangeScore
 	mu       sync.RWMutex
-	stopCh   chan struct{}
-	wg       sync.WaitGroup // A wait group to ensure that the goroutine finishes executing before `stopCh` is closed.
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
 }
 
 func NewScheduler(scorer *scorer.Scorer, pairs []string, interval time.Duration) *Scheduler {
@@ -25,14 +26,16 @@ func NewScheduler(scorer *scorer.Scorer, pairs []string, interval time.Duration)
 		pairs:    pairs,
 		interval: interval,
 		cache:    make(map[string][]*models.ExchangeScore),
-		stopCh:   make(chan struct{}),
 	}
 }
 
 // Begins the polling loop in a background goroutine.
 func (s *Scheduler) Start() {
+	ctx, cancel := context.WithCancel(context.Background())
+	s.cancel = cancel
+
 	// Run once immediately so cache isn't empty on first request
-	s.refresh()
+	s.refresh(ctx)
 
 	s.wg.Add(1)
 	go func() {
@@ -44,8 +47,8 @@ func (s *Scheduler) Start() {
 		for {
 			select {
 			case <-ticker.C:
-				s.refresh()
-			case <-s.stopCh:
+				s.refresh(ctx)
+			case <-ctx.Done():
 				log.Info().Msg("scheduler stopped")
 				return
 			}
@@ -60,7 +63,7 @@ func (s *Scheduler) Start() {
 
 // Signals the background goroutine to exit cleanly.
 func (s *Scheduler) Stop() {
-	close(s.stopCh)
+	s.cancel()
 	// blocks until the goroutine fully exits.
 	// if refresh() is running midway when main() exits, Stop() is blocked until the goroutine finishes,
 	// ensuring that the HTTP request finishes and the cache is updated before the goroutine exits.
@@ -77,9 +80,9 @@ func (s *Scheduler) GetScores(pair string) ([]*models.ExchangeScore, bool) {
 }
 
 // Fetches fresh scores for all pairs and updates the cache.
-func (s *Scheduler) refresh() {
+func (s *Scheduler) refresh(ctx context.Context) {
 	for _, pair := range s.pairs {
-		scores, err := s.scorer.ScoreAll(pair)
+		scores, err := s.scorer.ScoreAll(ctx, pair)
 		if err != nil {
 			log.Error().Err(err).Str("pair", pair).Msg("scheduler refresh failed")
 			continue

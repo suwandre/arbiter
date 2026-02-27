@@ -1,6 +1,7 @@
 package scorer
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -26,7 +27,7 @@ func NewScorer(exchanges []exchange.Exchange) *Scorer {
 
 // Fetches data from all exchanges concurrently for a given pair
 // and returns a ranked slice of ExchangeScores.
-func (s *Scorer) ScoreAll(pair string) ([]*models.ExchangeScore, error) {
+func (s *Scorer) ScoreAll(ctx context.Context, pair string) ([]*models.ExchangeScore, error) {
 	results := make(chan ExchangeResult, len(s.exchanges))
 
 	var wg sync.WaitGroup
@@ -37,7 +38,7 @@ func (s *Scorer) ScoreAll(pair string) ([]*models.ExchangeScore, error) {
 		go func(ex exchange.Exchange) {
 			defer wg.Done()
 
-			score, err := fetchAndScore(ex, pair)
+			score, err := fetchAndScore(ctx, ex, pair)
 			results <- ExchangeResult{Score: score, Err: err}
 		}(ex)
 	}
@@ -67,18 +68,18 @@ func (s *Scorer) ScoreAll(pair string) ([]*models.ExchangeScore, error) {
 }
 
 // Calls all three data endpoints for one exchange and computes its score.
-func fetchAndScore(ex exchange.Exchange, pair string) (*models.ExchangeScore, error) {
-	funding, err := ex.GetFundingRate(pair)
+func fetchAndScore(ctx context.Context, ex exchange.Exchange, pair string) (*models.ExchangeScore, error) {
+	funding, err := ex.GetFundingRate(ctx, pair)
 	if err != nil {
 		return nil, fmt.Errorf("[%s] funding rate error: %w", ex.Name(), err)
 	}
 
-	spread, err := ex.GetSpread(pair)
+	spread, err := ex.GetSpread(ctx, pair)
 	if err != nil {
 		return nil, fmt.Errorf("[%s] spread error: %w", ex.Name(), err)
 	}
 
-	depth, err := ex.GetOrderBookDepth(pair)
+	depth, err := ex.GetOrderBookDepth(ctx, pair)
 	if err != nil {
 		return nil, fmt.Errorf("[%s] depth error: %w", ex.Name(), err)
 	}
