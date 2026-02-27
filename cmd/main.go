@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,60 +18,57 @@ import (
 )
 
 func main() {
-	// ── 1. Logger setup ─────────────────────────────────────────
+	// ── 1. Logger setup
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 
-	// ── 2. Config ────────────────────────────────────────────────
+	// ── 2. Root context setup
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// ── 3. Config
 	cfg := config.Load()
 	log.Info().Msg("config loaded")
 
-	// ── 3. Exchange adapters ──────────────────────────────────────
+	// ── 4. Exchange adapters
 	exchanges := []exchange.Exchange{
 		exchange.NewBinanceAdapter(cfg.BinanceKey),
 		exchange.NewBybitAdapter(cfg.BybitKey),
 	}
 	log.Info().Int("count", len(exchanges)).Msg("exchange adapters initialized")
 
-	// ── 4. Scheduler ──────────────────────────────────────────────
+	// ── 5. Scorer + Scheduler
 	sc := scorer.NewScorer(exchanges)
-
 	sched := scheduler.NewScheduler(sc, []string{
 		"BTCUSDT",
 		"ETHUSDT",
 		"SOLUSDT",
 	}, 10*time.Second)
 
-	sched.Start()
-	// scheduler goroutine will get killed when main() exists
+	sched.Start(ctx)
 	defer sched.Stop()
 
-	// ── 5. Fiber app ──────────────────────────────────────────────
+	// ── 6. Fiber app
 	app := fiber.New(fiber.Config{
 		AppName:      "Arbiter",
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	})
 
-	// ── 6. Routes ─────────────────────────────────────────────────
+	// ── 7. Routes
 	api.SetupRoutes(app, sched)
 
-	// ── 7. Graceful shutdown ──────────────────────────────────────
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
-
+	// ── 8. Graceful shutdown listener
 	go func() {
-		<-quit
+		<-ctx.Done()
 		log.Info().Msg("shutdown signal received")
-
 		if err := app.Shutdown(); err != nil {
 			log.Error().Err(err).Msg("error during shutdown")
 		}
 	}()
 
-	// ── 8. Start server ───────────────────────────────────────────
+	// ── 9. Start server (blocking)
 	log.Info().Str("port", cfg.AppPort).Msg("starting server")
-
 	if err := app.Listen(":" + cfg.AppPort); err != nil {
 		log.Fatal().Err(err).Msg("server failed to start")
 	}

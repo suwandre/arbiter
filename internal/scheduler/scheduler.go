@@ -30,16 +30,15 @@ func NewScheduler(scorer *scorer.Scorer, pairs []string, interval time.Duration)
 }
 
 // Begins the polling loop in a background goroutine.
-func (s *Scheduler) Start() {
-	ctx, cancel := context.WithCancel(context.Background())
+func (s *Scheduler) Start(parentCtx context.Context) {
+	ctx, cancel := context.WithCancel(parentCtx)
 	s.cancel = cancel
 
-	// Run once immediately so cache isn't empty on first request
+	// Run immediately once so cache isn't empty on start
 	s.refresh(ctx)
 
 	s.wg.Add(1)
 	go func() {
-		// signals when goroutine exists.
 		defer s.wg.Done()
 		ticker := time.NewTicker(s.interval)
 		defer ticker.Stop()
