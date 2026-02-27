@@ -78,7 +78,7 @@ func (b *BinanceAdapter) GetFundingRate(ctx context.Context, pair string) (*mode
 
 // Fetches the current best bid/ask and calculates spread.
 func (b *BinanceAdapter) GetSpread(ctx context.Context, pair string) (*models.Spread, error) {
-	url := fmt.Sprintf("https://api.binance.com/api/v3/ticker/bookTicker?symbol=%s", pair)
+	url := fmt.Sprintf("https://fapi.binance.com/fapi/v1/ticker/bookTicker?symbol=%s", pair)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -119,7 +119,7 @@ func (b *BinanceAdapter) GetSpread(ctx context.Context, pair string) (*models.Sp
 
 // GetOrderBookDepth fetches top-of-book liquidity depth
 func (b *BinanceAdapter) GetOrderBookDepth(ctx context.Context, pair string) (*models.OrderBookDepth, error) {
-	url := fmt.Sprintf("https://api.binance.com/api/v3/depth?symbol=%s&limit=5", pair)
+	url := fmt.Sprintf("https://fapi.binance.com/fapi/v1/depth?symbol=%s&limit=5", pair)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
