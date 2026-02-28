@@ -63,6 +63,16 @@ func (s *Scorer) ScoreAll(ctx context.Context, pair string) ([]*models.ExchangeS
 		return nil, fmt.Errorf("no exchange data available for pair %s", pair)
 	}
 
+	// Normalize depth across exchanges before scoring
+	normalizeDepth(scores)
+
+	// Now compute composite with normalized depth
+	for _, score := range scores {
+		score.CompositeScore = (1/(1+score.FundingRate*100))*0.4 +
+			(1/(1+score.SpreadPct))*0.4 +
+			score.DepthScore*0.2
+	}
+
 	rankScores(scores)
 	return scores, nil
 }
@@ -89,22 +99,13 @@ func fetchAndScore(ctx context.Context, ex exchange.Exchange, pair string) (*mod
 		spreadPct = (spread.Spread / spread.Bid) * 100
 	}
 
-	depthScore := depth.BidDepth + depth.AskDepth
-
-	// Lower funding rate = better, lower spread = better, higher depth = better
-	// Composite: we invert funding and spread so higher score = better exchange
-	composite := (1/(1+funding.Rate*100))*0.4 +
-		(1/(1+spreadPct))*0.4 +
-		(depthScore/1_000_000)*0.2
-
 	return &models.ExchangeScore{
-		Exchange:       ex.Name(),
-		Pair:           pair,
-		FundingRate:    funding.Rate,
-		SpreadPct:      spreadPct,
-		DepthScore:     depthScore,
-		CompositeScore: composite,
-		UpdatedAt:      time.Now(),
+		Exchange:    ex.Name(),
+		Pair:        pair,
+		FundingRate: funding.Rate,
+		SpreadPct:   spreadPct,
+		DepthScore:  depth.BidDepth + depth.AskDepth, // fetch raw first, we normalize in `ScoreAll`
+		UpdatedAt:   time.Now(),
 	}, nil
 }
 
@@ -115,6 +116,27 @@ func rankScores(scores []*models.ExchangeScore) {
 			if scores[j].CompositeScore > scores[i].CompositeScore {
 				scores[i], scores[j] = scores[j], scores[i]
 			}
+		}
+	}
+}
+
+// Normalizes depth scores so they range from 0 to 1.
+func normalizeDepth(scores []*models.ExchangeScore) {
+	minD, maxD := scores[0].DepthScore, scores[0].DepthScore
+	for _, s := range scores[1:] {
+		if s.DepthScore < minD {
+			minD = s.DepthScore
+		}
+		if s.DepthScore > maxD {
+			maxD = s.DepthScore
+		}
+	}
+
+	for _, s := range scores {
+		if maxD == minD {
+			s.DepthScore = 1.0 // all equal, give full score
+		} else {
+			s.DepthScore = (s.DepthScore - minD) / (maxD - minD)
 		}
 	}
 }

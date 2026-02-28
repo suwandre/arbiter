@@ -34,6 +34,7 @@ func main() {
 	exchanges := []exchange.Exchange{
 		exchange.NewBinanceAdapter(cfg.BinanceKey),
 		exchange.NewBybitAdapter(cfg.BybitKey),
+		exchange.NewMexcAdapter(cfg.MexcKey),
 	}
 	log.Info().Int("count", len(exchanges)).Msg("exchange adapters initialized")
 
