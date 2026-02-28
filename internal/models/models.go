@@ -29,7 +29,9 @@ type ExchangeScore struct {
 	Pair           string    `json:"pair"`
 	FundingRate    float64   `json:"funding_rate"`
 	SpreadPct      float64   `json:"spread_pct"`
+	RawBidDepth    float64   `json:"raw_bid_depth"`
+	RawAskDepth    float64   `json:"raw_ask_depth"`
 	DepthScore     float64   `json:"depth_score"`
-	CompositeScore float64   `json:"composite_score"` // final ranking score
+	CompositeScore float64   `json:"composite_score"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }

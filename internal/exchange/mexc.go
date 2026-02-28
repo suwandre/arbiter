@@ -94,7 +94,7 @@ func (m *MexcAdapter) GetOrderBookDepth(ctx context.Context, pair string) (*mode
 		return nil, fmt.Errorf("mexc depth: failed to read response body: %w", err)
 	}
 
-	// MEXC depth entries are [price, volume, orderCount]
+	// MEXC depth entries are [price, contractCount, orderCount]
 	var raw struct {
 		Success bool `json:"success"`
 		Code    int  `json:"code"`
@@ -120,13 +120,16 @@ func (m *MexcAdapter) GetOrderBookDepth(ctx context.Context, pair string) (*mode
 	}, nil
 }
 
-// MEXC depth entries are float64 arrays: [price, volume, orderCount]
-// unlike Binance/Bybit which use string arrays.
 func sumMexcDepth(levels [][]float64) float64 {
+	// NOTE: taken from BTC's contract detail from https://api.mexc.com/api/v1/contract/detail
+	const mexcContractSize = 0.0001
+
 	total := 0.0
 	for _, level := range levels {
 		if len(level) >= 2 {
-			total += level[0] * level[1] // price × volume
+			price := level[0]
+			contracts := level[1]
+			total += contracts * mexcContractSize * price // → USDT notional
 		}
 	}
 	return total

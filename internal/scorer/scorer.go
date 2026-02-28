@@ -104,7 +104,9 @@ func fetchAndScore(ctx context.Context, ex exchange.Exchange, pair string) (*mod
 		Pair:        pair,
 		FundingRate: funding.Rate,
 		SpreadPct:   spreadPct,
-		DepthScore:  depth.BidDepth + depth.AskDepth, // fetch raw first, we normalize in `ScoreAll`
+		RawBidDepth: depth.BidDepth,                  // raw bid depth
+		RawAskDepth: depth.AskDepth,                  // raw ask depth
+		DepthScore:  depth.BidDepth + depth.AskDepth, // raw depth score (sum of bid and ask depth), normalized later in ScoreALl
 		UpdatedAt:   time.Now(),
 	}, nil
 }
