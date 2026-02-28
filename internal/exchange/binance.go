@@ -47,6 +47,10 @@ func (b *BinanceAdapter) GetFundingRate(ctx context.Context, pair string) (*mode
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("binance funding rate: unexpected status %d", resp.StatusCode)
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
@@ -91,6 +95,10 @@ func (b *BinanceAdapter) GetSpread(ctx context.Context, pair string) (*models.Sp
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("binance spread: unexpected status %d", resp.StatusCode)
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
@@ -131,6 +139,10 @@ func (b *BinanceAdapter) GetOrderBookDepth(ctx context.Context, pair string) (*m
 		return nil, fmt.Errorf("binance depth request failed: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("binance depth: unexpected status %d", resp.StatusCode)
+	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

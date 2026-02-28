@@ -96,6 +96,10 @@ func (b *BybitAdapter) GetOrderBookDepth(ctx context.Context, pair string) (*mod
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("bybit depth: unexpected status %d", resp.StatusCode)
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
