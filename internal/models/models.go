@@ -17,11 +17,19 @@ type Spread struct {
 	Spread   float64 `json:"spread"` // Ask - Bid
 }
 
+type OrderBookLevel struct {
+	Price    float64
+	Quantity float64 // always in base asset (BTC/ETH), already converted from contracts for MEXC
+}
+
 type OrderBookDepth struct {
-	Exchange string  `json:"exchange"`
-	Pair     string  `json:"pair"`
-	BidDepth float64 `json:"bid_depth"` // total liquidity on buy side
-	AskDepth float64 `json:"ask_depth"` // total liquidity on sell side
+	Exchange string           `json:"exchange"`
+	Pair     string           `json:"pair"`
+	BidDepth float64          `json:"bid_depth"` // total liquidity on buy side
+	AskDepth float64          `json:"ask_depth"` // total liquidity on sell side
+	Bids     []OrderBookLevel // raw levels, closest to mid first
+	Asks     []OrderBookLevel // raw levels, closest to mid first
+	MidPrice float64          // (best bid + best ask) / 2
 }
 
 type ExchangeScore struct {

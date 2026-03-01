@@ -158,24 +158,21 @@ func (b *BinanceAdapter) GetOrderBookDepth(ctx context.Context, pair string) (*m
 		return nil, fmt.Errorf("failed to parse depth response: %w", err)
 	}
 
-	bidDepth := sumDepth(raw.Bids)
-	askDepth := sumDepth(raw.Asks)
+	bids := parseLevels(raw.Bids)
+	asks := parseLevels(raw.Asks)
+
+	midPrice := 0.0
+	if len(bids) > 0 && len(asks) > 0 {
+		midPrice = (bids[0].Price + asks[0].Price) / 2
+	}
 
 	return &models.OrderBookDepth{
 		Exchange: "binance",
 		Pair:     pair,
-		BidDepth: bidDepth,
-		AskDepth: askDepth,
+		BidDepth: sumDepth(raw.Bids), // keep for now
+		AskDepth: sumDepth(raw.Asks),
+		Bids:     bids,
+		Asks:     asks,
+		MidPrice: midPrice,
 	}, nil
-}
-
-// Private helper — sums total quote value across order book levels.
-func sumDepth(levels [][]string) float64 {
-	total := 0.0
-	for _, level := range levels {
-		price, _ := strconv.ParseFloat(level[0], 64)
-		qty, _ := strconv.ParseFloat(level[1], 64)
-		total += price * qty
-	}
-	return total
 }

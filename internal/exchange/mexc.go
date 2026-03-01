@@ -123,14 +123,36 @@ func (m *MexcAdapter) GetOrderBookDepth(ctx context.Context, pair string) (*mode
 
 	// MEXC depth uses contract sizes to calculate the depth
 	contractSize := m.contractSizes[toMexcSymbol(pair)]
+	bids := parseMexcLevels(raw.Data.Bids, contractSize)
+	asks := parseMexcLevels(raw.Data.Asks, contractSize)
+
+	midPrice := 0.0
+	if len(bids) > 0 && len(asks) > 0 {
+		midPrice = (bids[0].Price + asks[0].Price) / 2
+	}
 
 	return &models.OrderBookDepth{
 		Exchange: "mexc",
 		Pair:     pair,
 		BidDepth: sumMexcDepth(raw.Data.Bids, contractSize),
 		AskDepth: sumMexcDepth(raw.Data.Asks, contractSize),
+		Bids:     bids,
+		Asks:     asks,
+		MidPrice: midPrice,
 	}, nil
+}
 
+func parseMexcLevels(raw [][]float64, contractSize float64) []models.OrderBookLevel {
+	levels := make([]models.OrderBookLevel, 0, len(raw))
+	for _, entry := range raw {
+		if len(entry) < 2 {
+			continue
+		}
+		price := entry[0]
+		qty := entry[1] * contractSize // contracts → base asset
+		levels = append(levels, models.OrderBookLevel{Price: price, Quantity: qty})
+	}
+	return levels
 }
 
 func sumMexcDepth(levels [][]float64, contractSize float64) float64 {

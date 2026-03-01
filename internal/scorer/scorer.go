@@ -3,6 +3,7 @@ package scorer
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -10,6 +11,9 @@ import (
 	"github.com/suwandre/arbiter/internal/exchange"
 	"github.com/suwandre/arbiter/internal/models"
 )
+
+// DepthBandPct defines how far from mid price we consider (e.g. 0.005 means 0.5% from each side).
+const DepthBandPct = 0.005
 
 type Scorer struct {
 	exchanges []exchange.Exchange
@@ -99,14 +103,17 @@ func fetchAndScore(ctx context.Context, ex exchange.Exchange, pair string) (*mod
 		spreadPct = (spread.Spread / spread.Bid) * 100
 	}
 
+	weightedBid := weightedDepth(depth.Bids, depth.MidPrice, true)
+	weightedAsk := weightedDepth(depth.Asks, depth.MidPrice, false)
+
 	return &models.ExchangeScore{
 		Exchange:    ex.Name(),
 		Pair:        pair,
 		FundingRate: funding.Rate,
 		SpreadPct:   spreadPct,
-		RawBidDepth: depth.BidDepth,                  // raw bid depth
-		RawAskDepth: depth.AskDepth,                  // raw ask depth
-		DepthScore:  depth.BidDepth + depth.AskDepth, // raw depth score (sum of bid and ask depth), normalized later in ScoreALl
+		RawBidDepth: depth.BidDepth,
+		RawAskDepth: depth.AskDepth,
+		DepthScore:  weightedBid + weightedAsk, // normalized later
 		UpdatedAt:   time.Now(),
 	}, nil
 }
@@ -141,4 +148,25 @@ func normalizeDepth(scores []*models.ExchangeScore) {
 			s.DepthScore = (s.DepthScore - minD) / (maxD - minD)
 		}
 	}
+}
+
+func weightedDepth(levels []models.OrderBookLevel, mid float64, isBid bool) float64 {
+	total := 0.0
+	for _, lvl := range levels {
+		if mid == 0 {
+			break
+		}
+
+		dist := math.Abs(lvl.Price-mid) / mid
+
+		// ignore levels outside our band entirely
+		if dist > DepthBandPct {
+			continue
+		}
+
+		// weight: 1.0 at mid, 0.0 at band edge — linear decay
+		weight := 1.0 - (dist / DepthBandPct)
+		total += lvl.Price * lvl.Quantity * weight
+	}
+	return total
 }

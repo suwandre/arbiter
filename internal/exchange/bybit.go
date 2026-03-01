@@ -122,11 +122,22 @@ func (b *BybitAdapter) GetOrderBookDepth(ctx context.Context, pair string) (*mod
 		return nil, fmt.Errorf("bybit API error %d: %s", raw.RetCode, raw.RetMsg)
 	}
 
+	bids := parseLevels(raw.Result.Bids)
+	asks := parseLevels(raw.Result.Asks)
+
+	midPrice := 0.0
+	if len(bids) > 0 && len(asks) > 0 {
+		midPrice = (bids[0].Price + asks[0].Price) / 2
+	}
+
 	return &models.OrderBookDepth{
 		Exchange: "bybit",
 		Pair:     pair,
-		BidDepth: sumDepth(raw.Result.Bids),
+		BidDepth: sumDepth(raw.Result.Bids), // keep for now
 		AskDepth: sumDepth(raw.Result.Asks),
+		Bids:     bids,
+		Asks:     asks,
+		MidPrice: midPrice,
 	}, nil
 }
 
