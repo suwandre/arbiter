@@ -23,6 +23,8 @@ type mexcTicker struct {
 	Ask1        float64 `json:"ask1"`
 	FundingRate float64 `json:"fundingRate"`
 	Timestamp   int64   `json:"timestamp"`
+	Amount24    float64 `json:"amount24"` // 24h quote volume in USDT
+	HoldVol     float64 `json:"holdVol"`  // open interest in contracts
 }
 
 func NewMexcAdapter(apiKey string) (*MexcAdapter, error) {
@@ -139,6 +141,26 @@ func (m *MexcAdapter) GetOrderBookDepth(ctx context.Context, pair string) (*mode
 		Bids:     bids,
 		Asks:     asks,
 		MidPrice: midPrice,
+	}, nil
+}
+
+func (m *MexcAdapter) GetMarketStats(ctx context.Context, pair string) (*models.MarketStats, error) {
+	ticker, err := m.fetchTicker(ctx, pair)
+	if err != nil {
+		return nil, err
+	}
+
+	contractSize := m.contractSizes[toMexcSymbol(pair)]
+
+	// HoldVol is in contracts, convert to USDT using contract size and last price.
+	// last price not directly available here so we use bid1 as approximation.
+	oiUSDT := ticker.HoldVol * contractSize * ticker.Bid1
+
+	return &models.MarketStats{
+		Exchange:     "mexc",
+		Pair:         pair,
+		Volume24h:    ticker.Amount24, // already in USDT
+		OpenInterest: oiUSDT,
 	}, nil
 }
 

@@ -176,3 +176,101 @@ func (b *BinanceAdapter) GetOrderBookDepth(ctx context.Context, pair string) (*m
 		MidPrice: midPrice,
 	}, nil
 }
+
+func (b *BinanceAdapter) GetMarketStats(ctx context.Context, pair string) (*models.MarketStats, error) {
+	type tickerResult struct {
+		volume float64
+		vwap   float64
+		err    error
+	}
+	type oiResult struct {
+		oiBTC float64
+		err   error
+	}
+
+	tickerCh := make(chan tickerResult, 1)
+	oiCh := make(chan oiResult, 1)
+
+	go func() {
+		url := fmt.Sprintf("https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=%s", pair)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			tickerCh <- tickerResult{err: err}
+			return
+		}
+		resp, err := b.httpClient.Do(req)
+		if err != nil {
+			tickerCh <- tickerResult{err: err}
+			return
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+
+		var raw struct {
+			QuoteVolume      string `json:"quoteVolume"`
+			WeightedAvgPrice string `json:"weightedAvgPrice"`
+		}
+		if err := json.Unmarshal(body, &raw); err != nil {
+			tickerCh <- tickerResult{err: fmt.Errorf("binance: failed to parse 24hr ticker: %w", err)}
+			return
+		}
+		vol, err := strconv.ParseFloat(raw.QuoteVolume, 64)
+		if err != nil {
+			tickerCh <- tickerResult{err: fmt.Errorf("binance: failed to parse quoteVolume: %w", err)}
+			return
+		}
+		vwap, err := strconv.ParseFloat(raw.WeightedAvgPrice, 64)
+		if err != nil {
+			tickerCh <- tickerResult{err: fmt.Errorf("binance: failed to parse weightedAvgPrice: %w", err)}
+			return
+		}
+		tickerCh <- tickerResult{volume: vol, vwap: vwap}
+	}()
+
+	go func() {
+		url := fmt.Sprintf("https://fapi.binance.com/fapi/v1/openInterest?symbol=%s", pair)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			oiCh <- oiResult{err: err}
+			return
+		}
+		resp, err := b.httpClient.Do(req)
+		if err != nil {
+			oiCh <- oiResult{err: err}
+			return
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+
+		var raw struct {
+			OpenInterest string `json:"openInterest"`
+		}
+		if err := json.Unmarshal(body, &raw); err != nil {
+			oiCh <- oiResult{err: fmt.Errorf("binance: failed to parse open interest: %w", err)}
+			return
+		}
+		oiBTC, err := strconv.ParseFloat(raw.OpenInterest, 64)
+		if err != nil {
+			oiCh <- oiResult{err: fmt.Errorf("binance: failed to parse openInterest value: %w", err)}
+			return
+		}
+		oiCh <- oiResult{oiBTC: oiBTC}
+	}()
+
+	tr := <-tickerCh
+	if tr.err != nil {
+		return nil, fmt.Errorf("binance market stats (ticker): %w", tr.err)
+	}
+
+	or := <-oiCh
+	if or.err != nil {
+		return nil, fmt.Errorf("binance market stats (OI): %w", or.err)
+	}
+
+	return &models.MarketStats{
+		Exchange:     "binance",
+		Pair:         pair,
+		Volume24h:    tr.volume,
+		OpenInterest: or.oiBTC * tr.vwap, // convert BTC → USDT using VWAP
+	}, nil
+}

@@ -18,10 +18,13 @@ type BybitAdapter struct {
 }
 
 type bybitTicker struct {
-	Bid1Price       string `json:"bid1Price"`
-	Ask1Price       string `json:"ask1Price"`
-	FundingRate     string `json:"fundingRate"`
-	NextFundingTime string `json:"nextFundingTime"` // Unix ms string
+	Bid1Price         string `json:"bid1Price"`
+	Ask1Price         string `json:"ask1Price"`
+	FundingRate       string `json:"fundingRate"`
+	NextFundingTime   string `json:"nextFundingTime"`
+	Turnover24h       string `json:"turnover24h"`       // 24h quote volume in USDT
+	OpenInterest      string `json:"openInterest"`      // OI in base asset (e.g. BTC)
+	OpenInterestValue string `json:"openInterestValue"` // OI in USDT
 }
 
 func NewBybitAdapter(apiKey string) *BybitAdapter {
@@ -138,6 +141,30 @@ func (b *BybitAdapter) GetOrderBookDepth(ctx context.Context, pair string) (*mod
 		Bids:     bids,
 		Asks:     asks,
 		MidPrice: midPrice,
+	}, nil
+}
+
+func (b *BybitAdapter) GetMarketStats(ctx context.Context, pair string) (*models.MarketStats, error) {
+	ticker, err := b.fetchTicker(ctx, pair)
+	if err != nil {
+		return nil, err
+	}
+
+	volume, err := strconv.ParseFloat(ticker.Turnover24h, 64)
+	if err != nil {
+		return nil, fmt.Errorf("bybit: failed to parse turnover24h: %w", err)
+	}
+
+	oi, err := strconv.ParseFloat(ticker.OpenInterestValue, 64)
+	if err != nil {
+		return nil, fmt.Errorf("bybit: failed to parse open interest value: %w", err)
+	}
+
+	return &models.MarketStats{
+		Exchange:     "bybit",
+		Pair:         pair,
+		Volume24h:    volume,
+		OpenInterest: oi,
 	}, nil
 }
 
