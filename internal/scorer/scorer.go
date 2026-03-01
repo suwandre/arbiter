@@ -3,6 +3,7 @@ package scorer
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -70,12 +71,16 @@ func (s *Scorer) ScoreAll(ctx context.Context, pair string) ([]*models.ExchangeS
 
 	// Normalize depth across exchanges before scoring
 	normalizeDepth(scores)
+	normalizeVolume(scores)
+	normalizeOI(scores)
 
-	// Now compute composite with normalized depth
 	for _, score := range scores {
-		score.CompositeScore = (1/(1+score.FundingRate*100))*0.4 +
-			(1/(1+score.SpreadPct))*0.4 +
-			score.DepthScore*0.2
+		score.CompositeScore =
+			score.VolumeScore*0.35 +
+				(1/(1+score.SpreadPct))*0.25 +
+				score.OIScore*0.20 +
+				score.DepthScore*0.15 +
+				(1/(1+score.FundingRate*100))*0.05
 	}
 
 	rankScores(scores)
@@ -99,6 +104,11 @@ func fetchAndScore(ctx context.Context, ex exchange.Exchange, pair string) (*mod
 		return nil, fmt.Errorf("[%s] depth error: %w", ex.Name(), err)
 	}
 
+	stats, err := ex.GetMarketStats(ctx, pair)
+	if err != nil {
+		return nil, fmt.Errorf("[%s] market stats error: %w", ex.Name(), err)
+	}
+
 	spreadPct := 0.0
 	if spread.Bid > 0 {
 		spreadPct = (spread.Spread / spread.Bid) * 100
@@ -108,14 +118,17 @@ func fetchAndScore(ctx context.Context, ex exchange.Exchange, pair string) (*mod
 	weightedAsk := weightedDepth(depth.Asks)
 
 	return &models.ExchangeScore{
-		Exchange:    ex.Name(),
-		Pair:        pair,
-		FundingRate: funding.Rate,
-		SpreadPct:   spreadPct,
-		RawBidDepth: depth.BidDepth,
-		RawAskDepth: depth.AskDepth,
-		DepthScore:  weightedBid + weightedAsk, // normalized later
-		UpdatedAt:   time.Now(),
+		Exchange:     ex.Name(),
+		Pair:         pair,
+		FundingRate:  funding.Rate,
+		SpreadPct:    spreadPct,
+		RawBidDepth:  depth.BidDepth,
+		RawAskDepth:  depth.AskDepth,
+		Volume24h:    stats.Volume24h,
+		OpenInterest: stats.OpenInterest,
+		DepthScore:   weightedBid + weightedAsk, // normalized later
+		// VolumeScore and OIScore computed later after normalization
+		UpdatedAt: time.Now(),
 	}, nil
 }
 
@@ -161,4 +174,42 @@ func weightedDepth(levels []models.OrderBookLevel) float64 {
 		total += lvl.Price * lvl.Quantity * weight
 	}
 	return total
+}
+
+func normalizeVolume(scores []*models.ExchangeScore) {
+	min, max := scores[0].Volume24h, scores[0].Volume24h
+	for _, s := range scores[1:] {
+		if s.Volume24h < min {
+			min = s.Volume24h
+		}
+		if s.Volume24h > max {
+			max = s.Volume24h
+		}
+	}
+	for _, s := range scores {
+		if max == min {
+			s.VolumeScore = 1.0
+		} else {
+			s.VolumeScore = math.Log1p(s.Volume24h-min) / math.Log1p(max-min)
+		}
+	}
+}
+
+func normalizeOI(scores []*models.ExchangeScore) {
+	min, max := scores[0].OpenInterest, scores[0].OpenInterest
+	for _, s := range scores[1:] {
+		if s.OpenInterest < min {
+			min = s.OpenInterest
+		}
+		if s.OpenInterest > max {
+			max = s.OpenInterest
+		}
+	}
+	for _, s := range scores {
+		if max == min {
+			s.OIScore = 1.0
+		} else {
+			s.OIScore = math.Log1p(s.OpenInterest-min) / math.Log1p(max-min)
+		}
+	}
 }
