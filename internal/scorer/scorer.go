@@ -3,7 +3,6 @@ package scorer
 import (
 	"context"
 	"fmt"
-	"math"
 	"sync"
 	"time"
 
@@ -12,8 +11,10 @@ import (
 	"github.com/suwandre/arbiter/internal/models"
 )
 
-// DepthBandPct defines how far from mid price we consider (e.g. 0.005 means 0.5% from each side).
-const DepthBandPct = 0.005
+// TargetLevels controls depth weighting in the order book scorer.
+// The top N levels are weighted linearly: level 0 gets full weight (1.0),
+// level N-1 gets near-zero weight. Levels beyond N are ignored entirely.
+const TargetLevels = 20
 
 type Scorer struct {
 	exchanges []exchange.Exchange
@@ -103,8 +104,8 @@ func fetchAndScore(ctx context.Context, ex exchange.Exchange, pair string) (*mod
 		spreadPct = (spread.Spread / spread.Bid) * 100
 	}
 
-	weightedBid := weightedDepth(depth.Bids, depth.MidPrice, true)
-	weightedAsk := weightedDepth(depth.Asks, depth.MidPrice, false)
+	weightedBid := weightedDepth(depth.Bids)
+	weightedAsk := weightedDepth(depth.Asks)
 
 	return &models.ExchangeScore{
 		Exchange:    ex.Name(),
@@ -150,22 +151,13 @@ func normalizeDepth(scores []*models.ExchangeScore) {
 	}
 }
 
-func weightedDepth(levels []models.OrderBookLevel, mid float64, isBid bool) float64 {
+func weightedDepth(levels []models.OrderBookLevel) float64 {
 	total := 0.0
-	for _, lvl := range levels {
-		if mid == 0 {
+	for i, lvl := range levels {
+		if i >= TargetLevels {
 			break
 		}
-
-		dist := math.Abs(lvl.Price-mid) / mid
-
-		// ignore levels outside our band entirely
-		if dist > DepthBandPct {
-			continue
-		}
-
-		// weight: 1.0 at mid, 0.0 at band edge — linear decay
-		weight := 1.0 - (dist / DepthBandPct)
+		weight := 1.0 - (float64(i) / float64(TargetLevels))
 		total += lvl.Price * lvl.Quantity * weight
 	}
 	return total

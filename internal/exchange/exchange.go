@@ -7,8 +7,9 @@ import (
 )
 
 type Exchange interface {
+	Name() string
 	GetFundingRate(ctx context.Context, pair string) (*models.FundingRate, error)
 	GetSpread(ctx context.Context, pair string) (*models.Spread, error)
 	GetOrderBookDepth(ctx context.Context, pair string) (*models.OrderBookDepth, error)
-	Name() string
+	GetMarketStats(ctx context.Context, pair string) (*models.MarketStats, error)
 }

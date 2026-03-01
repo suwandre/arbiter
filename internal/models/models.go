@@ -32,6 +32,13 @@ type OrderBookDepth struct {
 	MidPrice float64          // (best bid + best ask) / 2
 }
 
+type MarketStats struct {
+	Exchange     string
+	Pair         string
+	Volume24h    float64 // 24h quote volume in USDT
+	OpenInterest float64 // open interest in USDT
+}
+
 type ExchangeScore struct {
 	Exchange       string    `json:"exchange"`
 	Pair           string    `json:"pair"`
@@ -40,6 +47,10 @@ type ExchangeScore struct {
 	RawBidDepth    float64   `json:"raw_bid_depth"`
 	RawAskDepth    float64   `json:"raw_ask_depth"`
 	DepthScore     float64   `json:"depth_score"`
+	Volume24h      float64   `json:"volume_24h"`
+	OpenInterest   float64   `json:"open_interest"`
+	VolumeScore    float64   `json:"volume_score"`
+	OIScore        float64   `json:"oi_score"`
 	CompositeScore float64   `json:"composite_score"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }
