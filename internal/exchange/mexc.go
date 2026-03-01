@@ -13,8 +13,9 @@ import (
 )
 
 type MexcAdapter struct {
-	apiKey     string
-	httpClient *http.Client
+	apiKey        string
+	httpClient    *http.Client
+	contractSizes map[string]float64 // MEXC calculates orderbooks via contract sizes. This stores the contract size for each pair.
 }
 
 type mexcTicker struct {
@@ -24,13 +25,21 @@ type mexcTicker struct {
 	Timestamp   int64   `json:"timestamp"`
 }
 
-func NewMexcAdapter(apiKey string) *MexcAdapter {
-	return &MexcAdapter{
+func NewMexcAdapter(apiKey string) (*MexcAdapter, error) {
+	m := &MexcAdapter{
 		apiKey: apiKey,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
+		contractSizes: make(map[string]float64),
 	}
+
+	// fetch contract sizes once
+	if err := m.loadContractSizes(context.Background()); err != nil {
+		return nil, fmt.Errorf("mexc: failed to load contract sizes: %w", err)
+	}
+
+	return m, nil
 }
 
 func (m *MexcAdapter) Name() string {
@@ -70,7 +79,7 @@ func (m *MexcAdapter) GetSpread(ctx context.Context, pair string) (*models.Sprea
 
 func (m *MexcAdapter) GetOrderBookDepth(ctx context.Context, pair string) (*models.OrderBookDepth, error) {
 	url := fmt.Sprintf(
-		"https://contract.mexc.com/api/v1/contract/depth/%s?limit=5",
+		"https://contract.mexc.com/api/v1/contract/depth/%s?limit=50",
 		toMexcSymbol(pair),
 	)
 
@@ -112,24 +121,24 @@ func (m *MexcAdapter) GetOrderBookDepth(ctx context.Context, pair string) (*mode
 		return nil, fmt.Errorf("mexc API error code %d", raw.Code)
 	}
 
+	// MEXC depth uses contract sizes to calculate the depth
+	contractSize := m.contractSizes[toMexcSymbol(pair)]
+
 	return &models.OrderBookDepth{
 		Exchange: "mexc",
 		Pair:     pair,
-		BidDepth: sumMexcDepth(raw.Data.Bids),
-		AskDepth: sumMexcDepth(raw.Data.Asks),
+		BidDepth: sumMexcDepth(raw.Data.Bids, contractSize),
+		AskDepth: sumMexcDepth(raw.Data.Asks, contractSize),
 	}, nil
+
 }
 
-func sumMexcDepth(levels [][]float64) float64 {
-	// NOTE: taken from BTC's contract detail from https://api.mexc.com/api/v1/contract/detail
-	const mexcContractSize = 0.0001
-
+func sumMexcDepth(levels [][]float64, contractSize float64) float64 {
 	total := 0.0
 	for _, level := range levels {
 		if len(level) >= 2 {
-			price := level[0]
-			contracts := level[1]
-			total += contracts * mexcContractSize * price // → USDT notional
+			// level[1] = contracts, level[0] = price
+			total += level[1] * contractSize * level[0]
 		}
 	}
 	return total
@@ -185,4 +194,47 @@ func (m *MexcAdapter) fetchTicker(ctx context.Context, pair string) (*mexcTicker
 	}
 
 	return &raw.Data, nil
+}
+
+func (m *MexcAdapter) loadContractSizes(ctx context.Context) error {
+	url := "https://contract.mexc.com/api/v1/contract/detail"
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("mexc contract detail: failed to build request: %w", err)
+	}
+
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("mexc contract detail request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("mexc contract detail: failed to read body: %w", err)
+	}
+
+	var raw struct {
+		Success bool `json:"success"`
+		Code    int  `json:"code"`
+		Data    []struct {
+			Symbol       string  `json:"symbol"`
+			ContractSize float64 `json:"contractSize"`
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return fmt.Errorf("mexc contract detail: failed to parse: %w", err)
+	}
+
+	if !raw.Success || raw.Code != 0 {
+		return fmt.Errorf("mexc contract detail: API error code %d", raw.Code)
+	}
+
+	for _, d := range raw.Data {
+		m.contractSizes[d.Symbol] = d.ContractSize
+	}
+
+	return nil
 }

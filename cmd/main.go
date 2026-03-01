@@ -31,10 +31,16 @@ func main() {
 	log.Info().Msg("config loaded")
 
 	// ── 4. Exchange adapters
+	// MEXC needs to load contract sizes separately, thus the extra initialization
+	mexc, err := exchange.NewMexcAdapter(cfg.MexcKey)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to initialize MEXC adapter")
+	}
+
 	exchanges := []exchange.Exchange{
 		exchange.NewBinanceAdapter(cfg.BinanceKey),
 		exchange.NewBybitAdapter(cfg.BybitKey),
-		exchange.NewMexcAdapter(cfg.MexcKey),
+		mexc,
 	}
 	log.Info().Int("count", len(exchanges)).Msg("exchange adapters initialized")
 

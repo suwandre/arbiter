@@ -81,7 +81,7 @@ func (b *BybitAdapter) GetSpread(ctx context.Context, pair string) (*models.Spre
 
 func (b *BybitAdapter) GetOrderBookDepth(ctx context.Context, pair string) (*models.OrderBookDepth, error) {
 	url := fmt.Sprintf(
-		"https://api.bybit.com/v5/market/orderbook?category=linear&symbol=%s&limit=5",
+		"https://api.bybit.com/v5/market/orderbook?category=linear&symbol=%s&limit=50",
 		pair,
 	)
 
