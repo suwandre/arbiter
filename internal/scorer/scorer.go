@@ -87,26 +87,36 @@ func (s *Scorer) ScoreAll(ctx context.Context, pair string) ([]*models.ExchangeS
 	return scores, nil
 }
 
-// Calls all three data endpoints for one exchange and computes its score.
 func fetchAndScore(ctx context.Context, ex exchange.Exchange, pair string) (*models.ExchangeScore, error) {
-	funding, err := ex.GetFundingRate(ctx, pair)
-	if err != nil {
-		return nil, fmt.Errorf("[%s] funding rate error: %w", ex.Name(), err)
-	}
+	var (
+		wg      sync.WaitGroup
+		funding *models.FundingRate
+		spread  *models.Spread
+		depth   *models.OrderBookDepth
+		stats   *models.MarketStats
 
-	spread, err := ex.GetSpread(ctx, pair)
-	if err != nil {
-		return nil, fmt.Errorf("[%s] spread error: %w", ex.Name(), err)
-	}
+		fundingErr, spreadErr, depthErr, statsErr error
+	)
 
-	depth, err := ex.GetOrderBookDepth(ctx, pair)
-	if err != nil {
-		return nil, fmt.Errorf("[%s] depth error: %w", ex.Name(), err)
-	}
+	wg.Add(4)
+	go func() { defer wg.Done(); funding, fundingErr = ex.GetFundingRate(ctx, pair) }()
+	go func() { defer wg.Done(); spread, spreadErr = ex.GetSpread(ctx, pair) }()
+	go func() { defer wg.Done(); depth, depthErr = ex.GetOrderBookDepth(ctx, pair) }()
+	go func() { defer wg.Done(); stats, statsErr = ex.GetMarketStats(ctx, pair) }()
 
-	stats, err := ex.GetMarketStats(ctx, pair)
-	if err != nil {
-		return nil, fmt.Errorf("[%s] market stats error: %w", ex.Name(), err)
+	wg.Wait()
+
+	if fundingErr != nil {
+		return nil, fmt.Errorf("[%s] funding rate error: %w", ex.Name(), fundingErr)
+	}
+	if spreadErr != nil {
+		return nil, fmt.Errorf("[%s] spread error: %w", ex.Name(), spreadErr)
+	}
+	if depthErr != nil {
+		return nil, fmt.Errorf("[%s] depth error: %w", ex.Name(), depthErr)
+	}
+	if statsErr != nil {
+		return nil, fmt.Errorf("[%s] market stats error: %w", ex.Name(), statsErr)
 	}
 
 	spreadPct := 0.0
@@ -126,9 +136,8 @@ func fetchAndScore(ctx context.Context, ex exchange.Exchange, pair string) (*mod
 		RawAskDepth:  depth.AskDepth,
 		Volume24h:    stats.Volume24h,
 		OpenInterest: stats.OpenInterest,
-		DepthScore:   weightedBid + weightedAsk, // normalized later
-		// VolumeScore and OIScore computed later after normalization
-		UpdatedAt: time.Now(),
+		DepthScore:   weightedBid + weightedAsk,
+		UpdatedAt:    time.Now(),
 	}, nil
 }
 
