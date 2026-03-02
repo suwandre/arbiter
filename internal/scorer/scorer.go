@@ -205,6 +205,8 @@ func ComputeFundingArb(rawData []*models.RawExchangeData) []*models.FundingArbPa
 // ComputeSpotPerpBasis computes the spot/perp basis for each exchange and returns
 // results sorted by absolute basis descending (largest discrepancy first).
 // Exchanges where spot price is unavailable (SpotMidPrice == 0) are excluded.
+// Annualized estimates use 30d avg funding rate history rather than the current
+// snapshot, since basis is not expected to remain constant.
 func ComputeSpotPerpBasis(rawData []*models.RawExchangeData) []*models.BasisResult {
 	var results []*models.BasisResult
 
@@ -215,16 +217,32 @@ func ComputeSpotPerpBasis(rawData []*models.RawExchangeData) []*models.BasisResu
 
 		basisRaw := raw.Depth.MidPrice - raw.SpotMidPrice
 		basisPct := (basisRaw / raw.SpotMidPrice) * 100
-		annualized := basisPct * constants.FundingPeriodsPerYear
+
+		// Use historical funding rate as the basis annualization proxy.
+		// avg funding rate * periods/year is a better estimate of expected carry cost
+		// than extrapolating the current snapshot.
+		summary := ComputeFundingSummary(raw)
+
+		annualizedAvg := summary.AvgRate30d * float64(constants.FundingPeriodsPerYear) * 100
+		annualizedLow := (summary.AvgRate30d - summary.StdDev30d) * float64(constants.FundingPeriodsPerYear) * 100
+		annualizedHigh := (summary.AvgRate30d + summary.StdDev30d) * float64(constants.FundingPeriodsPerYear) * 100
+
+		// Normalize so low <= high always (matters when avg is negative)
+		if annualizedLow > annualizedHigh {
+			annualizedLow, annualizedHigh = annualizedHigh, annualizedLow
+		}
 
 		results = append(results, &models.BasisResult{
-			Exchange:     raw.Exchange,
-			PerpMidPrice: raw.Depth.MidPrice,
-			SpotMidPrice: raw.SpotMidPrice,
-			BasisRaw:     basisRaw,
-			BasisPct:     basisPct,
-			Annualized:   annualized,
-			UpdatedAt:    raw.FetchedAt,
+			Exchange:       raw.Exchange,
+			PerpMidPrice:   raw.Depth.MidPrice,
+			SpotMidPrice:   raw.SpotMidPrice,
+			BasisRaw:       basisRaw,
+			BasisPct:       basisPct,
+			AnnualizedAvg:  annualizedAvg,
+			AnnualizedLow:  annualizedLow,
+			AnnualizedHigh: annualizedHigh,
+			HistoryPeriods: summary.Periods,
+			UpdatedAt:      raw.FetchedAt,
 		})
 	}
 

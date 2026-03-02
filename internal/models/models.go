@@ -81,13 +81,20 @@ type RawExchangeData struct {
 
 // BasisResult holds the spot/perp basis for a single exchange.
 type BasisResult struct {
-	Exchange     string    `json:"exchange"`
-	PerpMidPrice float64   `json:"perp_mid_price"`
-	SpotMidPrice float64   `json:"spot_mid_price"`
-	BasisRaw     float64   `json:"basis_raw"`      // perp - spot, in USDT
-	BasisPct     float64   `json:"basis_pct"`      // (perp - spot) / spot * 100
-	Annualized   float64   `json:"annualized_pct"` // basis_pct * periods_per_year
-	UpdatedAt    time.Time `json:"updated_at"`
+	Exchange     string  `json:"exchange"`
+	PerpMidPrice float64 `json:"perp_mid_price"`
+	SpotMidPrice float64 `json:"spot_mid_price"`
+	BasisRaw     float64 `json:"basis_raw"` // perp - spot, in USDT
+	BasisPct     float64 `json:"basis_pct"` // (perp - spot) / spot * 100
+
+	// Annualized estimates derived from 30d avg funding rate history.
+	// More meaningful than extrapolating the current snapshot.
+	AnnualizedAvg  float64 `json:"annualized_avg_pct"`  // avg funding rate * periods/year * 100
+	AnnualizedLow  float64 `json:"annualized_low_pct"`  // (avg - 1 stddev) * periods/year * 100
+	AnnualizedHigh float64 `json:"annualized_high_pct"` // (avg + 1 stddev) * periods/year * 100
+	HistoryPeriods int     `json:"history_periods"`     // number of funding periods used
+
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type ExchangeScore struct {
