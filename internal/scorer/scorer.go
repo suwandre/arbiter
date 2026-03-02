@@ -14,36 +14,34 @@ import (
 
 const (
 	TargetLevels    = 20
-	DefaultPosition = 500_000.0 // default position size in USDT
+	DefaultPosition = 500_000.0
 )
 
 type Scorer struct {
 	exchanges []exchange.Exchange
 }
 
-type ExchangeResult struct {
-	Score *models.ExchangeScore
-	Err   error
+type fetchResult struct {
+	data *models.RawExchangeData
+	err  error
 }
 
 func NewScorer(exchanges []exchange.Exchange) *Scorer {
 	return &Scorer{exchanges}
 }
 
-func (s *Scorer) ScoreAll(ctx context.Context, pair string, positionSize float64) ([]*models.ExchangeScore, error) {
-	if positionSize <= 0 {
-		positionSize = DefaultPosition
-	}
-
-	results := make(chan ExchangeResult, len(s.exchanges))
+// FetchAll fetches raw market data from all exchanges for a given pair concurrently.
+// This is the only function that makes exchange API calls.
+func (s *Scorer) FetchAll(ctx context.Context, pair string) ([]*models.RawExchangeData, error) {
+	results := make(chan fetchResult, len(s.exchanges))
 	var wg sync.WaitGroup
 
 	for _, ex := range s.exchanges {
 		wg.Add(1)
 		go func(ex exchange.Exchange) {
 			defer wg.Done()
-			score, err := fetchAndScore(ctx, ex, pair, positionSize)
-			results <- ExchangeResult{Score: score, Err: err}
+			data, err := fetchRawData(ctx, ex, pair)
+			results <- fetchResult{data: data, err: err}
 		}(ex)
 	}
 
@@ -52,17 +50,40 @@ func (s *Scorer) ScoreAll(ctx context.Context, pair string, positionSize float64
 		close(results)
 	}()
 
-	var scores []*models.ExchangeScore
+	var allData []*models.RawExchangeData
 	for result := range results {
-		if result.Err != nil {
-			log.Warn().Err(result.Err).Msg("failed to score exchange, skipping")
+		if result.err != nil {
+			log.Warn().Err(result.err).Msg("failed to fetch exchange data, skipping")
 			continue
 		}
-		scores = append(scores, result.Score)
+		allData = append(allData, result.data)
 	}
 
-	if len(scores) == 0 {
+	if len(allData) == 0 {
 		return nil, fmt.Errorf("no exchange data available for pair %s", pair)
+	}
+
+	return allData, nil
+}
+
+// ScoreAll derives scores from already-fetched raw data. No API calls.
+// side: "long", "short", or "general" (default if empty).
+// positionSize: position size in USDT. Uses DefaultPosition if <= 0.
+func (s *Scorer) ScoreAll(rawData []*models.RawExchangeData, positionSize float64, side string) ([]*models.ExchangeScore, error) {
+	if positionSize <= 0 {
+		positionSize = DefaultPosition
+	}
+	if side == "" {
+		side = "general"
+	}
+
+	if len(rawData) == 0 {
+		return nil, fmt.Errorf("no raw data provided to ScoreAll")
+	}
+
+	scores := make([]*models.ExchangeScore, 0, len(rawData))
+	for _, raw := range rawData {
+		scores = append(scores, scoreFromRaw(raw, positionSize, side))
 	}
 
 	normalizeVolume(scores)
@@ -73,19 +94,36 @@ func (s *Scorer) ScoreAll(ctx context.Context, pair string, positionSize float64
 		// Trust slippage proportional to volume — low volume = less trustworthy book
 		score.SlippageScore *= score.VolumeScore
 
+		// Funding rate component depends on side:
+		// - Long: penalize positive funding (you pay), reward negative (you receive)
+		// - Short: penalize negative funding (you pay), reward positive (you receive)
+		// - General: same as long — mild penalty for positive funding
+		var fundingComponent float64
+		switch side {
+		case "short":
+			denom := 1.0 - score.FundingRate*100
+			if denom < 0.01 {
+				denom = 0.01 // clamp to avoid division by zero
+			}
+			fundingComponent = 1.0 / denom
+		default: // "long" or "general"
+			fundingComponent = 1.0 / (1.0 + score.FundingRate*100)
+		}
+
 		score.CompositeScore =
 			score.VolumeScore*0.40 +
 				(1/(1+score.SpreadPct))*0.25 +
 				score.OIScore*0.20 +
 				score.SlippageScore*0.10 +
-				(1/(1+score.FundingRate*100))*0.05
+				fundingComponent*0.05
 	}
 
 	rankScores(scores)
 	return scores, nil
 }
 
-func fetchAndScore(ctx context.Context, ex exchange.Exchange, pair string, positionSize float64) (*models.ExchangeScore, error) {
+// fetchRawData fetches all market data for one exchange+pair concurrently.
+func fetchRawData(ctx context.Context, ex exchange.Exchange, pair string) (*models.RawExchangeData, error) {
 	var (
 		wg      sync.WaitGroup
 		funding *models.FundingRate
@@ -117,56 +155,66 @@ func fetchAndScore(ctx context.Context, ex exchange.Exchange, pair string, posit
 		return nil, fmt.Errorf("[%s] market stats error: %w", ex.Name(), statsErr)
 	}
 
-	spreadPct := 0.0
-	if spread.Bid > 0 {
-		spreadPct = (spread.Spread / spread.Bid) * 100
-	}
-
-	slippagePct := estimateSlippage(depth.Asks, depth.MidPrice, positionSize)
-
-	/// LOGGING
-	askLevels := len(depth.Asks)
-	bidLevels := len(depth.Bids)
-
-	totalAskValue := 0.0
-	for _, lvl := range depth.Asks {
-		totalAskValue += lvl.Price * lvl.Quantity
-	}
-
-	totalBidValue := 0.0
-	for _, lvl := range depth.Bids {
-		totalBidValue += lvl.Price * lvl.Quantity
-	}
-
+	// Debug logging
 	log.Debug().
 		Str("exchange", ex.Name()).
 		Str("pair", pair).
-		Int("ask_levels", askLevels).
-		Int("bid_levels", bidLevels).
-		Float64("total_ask_value_usdt", totalAskValue).
-		Float64("total_bid_value_usdt", totalBidValue).
+		Int("ask_levels", len(depth.Asks)).
+		Int("bid_levels", len(depth.Bids)).
+		Float64("total_ask_value_usdt", totalBookValue(depth.Asks)).
+		Float64("total_bid_value_usdt", totalBookValue(depth.Bids)).
 		Msg("order book depth stats")
-		/// END OF LOGS
 
-	return &models.ExchangeScore{
-		Exchange:     ex.Name(),
-		Pair:         pair,
-		FundingRate:  funding.Rate,
-		SpreadPct:    spreadPct,
-		RawBidDepth:  depth.BidDepth,
-		RawAskDepth:  depth.AskDepth,
-		SlippagePct:  slippagePct,
-		Volume24h:    stats.Volume24h,
-		OpenInterest: stats.OpenInterest,
-		PositionSize: positionSize,
-		UpdatedAt:    time.Now(),
+	return &models.RawExchangeData{
+		Exchange:  ex.Name(),
+		Pair:      pair,
+		Funding:   funding,
+		Spread:    spread,
+		Depth:     depth,
+		Stats:     stats,
+		FetchedAt: time.Now(),
 	}, nil
 }
 
-// Estimates slippage % for a market buy of positionUSDT,
-// walking the ask side of the book.
-func estimateSlippage(asks []models.OrderBookLevel, midPrice float64, positionUSDT float64) float64 {
-	if len(asks) == 0 || midPrice == 0 {
+// scoreFromRaw computes an ExchangeScore from raw data for a given side and position size.
+// Pure computation — no API calls.
+func scoreFromRaw(raw *models.RawExchangeData, positionSize float64, side string) *models.ExchangeScore {
+	spreadPct := 0.0
+	if raw.Spread.Bid > 0 {
+		spreadPct = (raw.Spread.Spread / raw.Spread.Bid) * 100
+	}
+
+	// Pick order book side based on trade direction:
+	// Long = market buy = walk ask side (prices going up)
+	// Short = market sell = walk bid side (prices going down)
+	var levels []models.OrderBookLevel
+	if side == "short" {
+		levels = raw.Depth.Bids
+	} else {
+		levels = raw.Depth.Asks
+	}
+	slippagePct := estimateSlippage(levels, raw.Depth.MidPrice, positionSize)
+
+	return &models.ExchangeScore{
+		Exchange:     raw.Exchange,
+		Pair:         raw.Pair,
+		Side:         side,
+		FundingRate:  raw.Funding.Rate,
+		SpreadPct:    spreadPct,
+		RawBidDepth:  raw.Depth.BidDepth,
+		RawAskDepth:  raw.Depth.AskDepth,
+		SlippagePct:  slippagePct,
+		Volume24h:    raw.Stats.Volume24h,
+		OpenInterest: raw.Stats.OpenInterest,
+		PositionSize: positionSize,
+		UpdatedAt:    raw.FetchedAt,
+	}
+}
+
+// estimateSlippage estimates slippage % for a market order of positionUSDT,
+// walking the provided order book levels (asks for long, bids for short).
+func estimateSlippage(levels []models.OrderBookLevel, midPrice float64, positionUSDT float64) float64 {
+	if len(levels) == 0 || midPrice == 0 {
 		return 0
 	}
 
@@ -174,7 +222,7 @@ func estimateSlippage(asks []models.OrderBookLevel, midPrice float64, positionUS
 	totalCost := 0.0
 	filledBase := 0.0
 
-	for _, lvl := range asks {
+	for _, lvl := range levels {
 		levelValue := lvl.Price * lvl.Quantity
 		if remaining <= levelValue {
 			filledBase += remaining / lvl.Price
@@ -187,8 +235,8 @@ func estimateSlippage(asks []models.OrderBookLevel, midPrice float64, positionUS
 		remaining -= levelValue
 	}
 
-	if remaining > 0 && len(asks) > 0 {
-		lastPrice := asks[len(asks)-1].Price
+	if remaining > 0 && len(levels) > 0 {
+		lastPrice := levels[len(levels)-1].Price
 		filledBase += remaining / lastPrice
 		totalCost += remaining
 	}
@@ -206,11 +254,16 @@ func estimateSlippage(asks []models.OrderBookLevel, midPrice float64, positionUS
 	return slippage
 }
 
-// Normalizes slippage so lower slippage = higher score.
-func normalizeSlippage(scores []*models.ExchangeScore) {
-	// prevent NaN from floating point near-zero values
-	const epsilon = 1e-9
+func totalBookValue(levels []models.OrderBookLevel) float64 {
+	total := 0.0
+	for _, lvl := range levels {
+		total += lvl.Price * lvl.Quantity
+	}
+	return total
+}
 
+func normalizeSlippage(scores []*models.ExchangeScore) {
+	const epsilon = 1e-9
 	max := scores[0].SlippagePct
 	for _, s := range scores[1:] {
 		if s.SlippagePct > max {

@@ -14,7 +14,7 @@ type Scheduler struct {
 	scorer   *scorer.Scorer
 	pairs    []string
 	interval time.Duration
-	cache    map[string][]*models.ExchangeScore
+	cache    map[string][]*models.RawExchangeData // pair -> raw data per exchange
 	mu       sync.RWMutex
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
@@ -25,16 +25,14 @@ func NewScheduler(scorer *scorer.Scorer, pairs []string, interval time.Duration)
 		scorer:   scorer,
 		pairs:    pairs,
 		interval: interval,
-		cache:    make(map[string][]*models.ExchangeScore),
+		cache:    make(map[string][]*models.RawExchangeData),
 	}
 }
 
-// Begins the polling loop in a background goroutine.
 func (s *Scheduler) Start(parentCtx context.Context) {
 	ctx, cancel := context.WithCancel(parentCtx)
 	s.cancel = cancel
 
-	// Run immediately once so cache isn't empty on start
 	s.refresh(ctx)
 
 	s.wg.Add(1)
@@ -60,38 +58,55 @@ func (s *Scheduler) Start(parentCtx context.Context) {
 		Msg("scheduler started")
 }
 
-// Signals the background goroutine to exit cleanly.
 func (s *Scheduler) Stop() {
 	s.cancel()
-	// blocks until the goroutine fully exits.
-	// if refresh() is running midway when main() exits, Stop() is blocked until the goroutine finishes,
-	// ensuring that the HTTP request finishes and the cache is updated before the goroutine exits.
 	s.wg.Wait()
 }
 
-// Returns the latest cached scores for a pair.
-func (s *Scheduler) GetScores(pair string) ([]*models.ExchangeScore, bool) {
+// GetScores returns scored results for a pair, side, and position size.
+// Scores are derived from cached raw data — no API calls.
+// side: "general", "long", or "short".
+// positionSize: position size in USDT. Uses DefaultPosition if <= 0.
+func (s *Scheduler) GetScores(pair string, side string, positionSize float64) ([]*models.ExchangeScore, bool) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	rawData, ok := s.cache[pair]
+	s.mu.RUnlock()
 
-	scores, ok := s.cache[pair]
-	return scores, ok
+	if !ok || len(rawData) == 0 {
+		return nil, false
+	}
+
+	scores, err := s.scorer.ScoreAll(rawData, positionSize, side)
+	if err != nil {
+		log.Error().Err(err).Str("pair", pair).Str("side", side).Msg("scoring failed")
+		return nil, false
+	}
+
+	return scores, true
 }
 
-// Fetches fresh scores for all pairs and updates the cache.
+// refresh fetches raw data for all pairs and updates the cache.
+// Only makes exchange API calls — no scoring happens here.
 func (s *Scheduler) refresh(ctx context.Context) {
 	for _, pair := range s.pairs {
-		scores, err := s.scorer.ScoreAll(ctx, pair, 0) // if 0 = use default $10K
+		rawData, err := s.scorer.FetchAll(ctx, pair)
 		if err != nil {
 			log.Error().Err(err).Str("pair", pair).Msg("scheduler refresh failed")
 			continue
 		}
 
 		s.mu.Lock()
-		s.cache[pair] = scores
+		s.cache[pair] = rawData
 		s.mu.Unlock()
 
-		log.Info().Str("pair", pair).Int("exchanges", len(scores)).Msg("cache refreshed")
+		log.Info().Str("pair", pair).Int("exchanges", len(rawData)).Msg("cache refreshed")
+
+		// Log scores for general side for observability
+		scores, err := s.scorer.ScoreAll(rawData, 0, "general")
+		if err != nil {
+			log.Error().Err(err).Str("pair", pair).Msg("failed to score for logging")
+			continue
+		}
 
 		for _, score := range scores {
 			log.Info().

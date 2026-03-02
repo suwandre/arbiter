@@ -39,9 +39,22 @@ type MarketStats struct {
 	OpenInterest float64 // open interest in USDT
 }
 
+// RawExchangeData holds one full fetch of market data for a single exchange+pair.
+// Fetched once per refresh cycle, then scored multiple times for different sides.
+type RawExchangeData struct {
+	Exchange  string
+	Pair      string
+	Funding   *FundingRate
+	Spread    *Spread
+	Depth     *OrderBookDepth
+	Stats     *MarketStats
+	FetchedAt time.Time
+}
+
 type ExchangeScore struct {
 	Exchange       string    `json:"exchange"`
 	Pair           string    `json:"pair"`
+	Side           string    `json:"side"` // "long", "short", or "general"
 	FundingRate    float64   `json:"funding_rate"`
 	SpreadPct      float64   `json:"spread_pct"`
 	RawBidDepth    float64   `json:"raw_bid_depth"`
