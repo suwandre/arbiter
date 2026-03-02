@@ -22,9 +22,9 @@ type bybitTicker struct {
 	Ask1Price         string `json:"ask1Price"`
 	FundingRate       string `json:"fundingRate"`
 	NextFundingTime   string `json:"nextFundingTime"`
-	Turnover24h       string `json:"turnover24h"`       // 24h quote volume in USDT
-	OpenInterest      string `json:"openInterest"`      // OI in base asset (e.g. BTC)
-	OpenInterestValue string `json:"openInterestValue"` // OI in USDT
+	Turnover24h       string `json:"turnover24h"`
+	OpenInterest      string `json:"openInterest"`
+	OpenInterestValue string `json:"openInterestValue"`
 }
 
 func NewBybitAdapter(apiKey string) *BybitAdapter {
@@ -40,23 +40,23 @@ func (b *BybitAdapter) Name() string {
 	return "bybit"
 }
 
-func (b *BybitAdapter) GetFundingRate(ctx context.Context, pair string) (*models.FundingRate, error) {
+func (b *BybitAdapter) GetFundingRate(ctx context.Context, pair string) (models.FundingRate, error) {
 	ticker, err := b.fetchTicker(ctx, pair)
 	if err != nil {
-		return nil, err
+		return models.FundingRate{}, err
 	}
 
 	rate, err := strconv.ParseFloat(ticker.FundingRate, 64)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse funding rate: %w", err)
+		return models.FundingRate{}, fmt.Errorf("failed to parse funding rate: %w", err)
 	}
 
 	tsMs, err := strconv.ParseInt(ticker.NextFundingTime, 10, 64)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse next funding time: %w", err)
+		return models.FundingRate{}, fmt.Errorf("failed to parse next funding time: %w", err)
 	}
 
-	return &models.FundingRate{
+	return models.FundingRate{
 		Exchange:    "bybit",
 		Pair:        pair,
 		Rate:        rate,
@@ -64,16 +64,16 @@ func (b *BybitAdapter) GetFundingRate(ctx context.Context, pair string) (*models
 	}, nil
 }
 
-func (b *BybitAdapter) GetSpread(ctx context.Context, pair string) (*models.Spread, error) {
+func (b *BybitAdapter) GetSpread(ctx context.Context, pair string) (models.Spread, error) {
 	ticker, err := b.fetchTicker(ctx, pair)
 	if err != nil {
-		return nil, err
+		return models.Spread{}, err
 	}
 
 	bid, _ := strconv.ParseFloat(ticker.Bid1Price, 64)
 	ask, _ := strconv.ParseFloat(ticker.Ask1Price, 64)
 
-	return &models.Spread{
+	return models.Spread{
 		Exchange: "bybit",
 		Pair:     pair,
 		Bid:      bid,
@@ -136,7 +136,7 @@ func (b *BybitAdapter) GetOrderBookDepth(ctx context.Context, pair string) (*mod
 	return &models.OrderBookDepth{
 		Exchange: "bybit",
 		Pair:     pair,
-		BidDepth: sumDepth(raw.Result.Bids), // keep for now
+		BidDepth: sumDepth(raw.Result.Bids),
 		AskDepth: sumDepth(raw.Result.Asks),
 		Bids:     bids,
 		Asks:     asks,
@@ -144,23 +144,23 @@ func (b *BybitAdapter) GetOrderBookDepth(ctx context.Context, pair string) (*mod
 	}, nil
 }
 
-func (b *BybitAdapter) GetMarketStats(ctx context.Context, pair string) (*models.MarketStats, error) {
+func (b *BybitAdapter) GetMarketStats(ctx context.Context, pair string) (models.MarketStats, error) {
 	ticker, err := b.fetchTicker(ctx, pair)
 	if err != nil {
-		return nil, err
+		return models.MarketStats{}, err
 	}
 
 	volume, err := strconv.ParseFloat(ticker.Turnover24h, 64)
 	if err != nil {
-		return nil, fmt.Errorf("bybit: failed to parse turnover24h: %w", err)
+		return models.MarketStats{}, fmt.Errorf("bybit: failed to parse turnover24h: %w", err)
 	}
 
 	oi, err := strconv.ParseFloat(ticker.OpenInterestValue, 64)
 	if err != nil {
-		return nil, fmt.Errorf("bybit: failed to parse open interest value: %w", err)
+		return models.MarketStats{}, fmt.Errorf("bybit: failed to parse open interest value: %w", err)
 	}
 
-	return &models.MarketStats{
+	return models.MarketStats{
 		Exchange:     "bybit",
 		Pair:         pair,
 		Volume24h:    volume,
@@ -230,6 +230,65 @@ func (b *BybitAdapter) GetFundingRateHistory(ctx context.Context, pair string, l
 	}
 
 	return history, nil
+}
+
+func (b *BybitAdapter) GetSpotPrice(ctx context.Context, pair string) (float64, error) {
+	url := fmt.Sprintf(
+		"https://api.bybit.com/v5/market/tickers?category=spot&symbol=%s",
+		pair,
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, fmt.Errorf("bybit spot price: failed to build request: %w", err)
+	}
+
+	resp, err := b.httpClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("bybit spot price request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("bybit spot price: unexpected status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("bybit spot price: failed to read body: %w", err)
+	}
+
+	var raw struct {
+		RetCode int    `json:"retCode"`
+		RetMsg  string `json:"retMsg"`
+		Result  struct {
+			List []struct {
+				Bid1Price string `json:"bid1Price"`
+				Ask1Price string `json:"ask1Price"`
+			} `json:"list"`
+		} `json:"result"`
+	}
+
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return 0, fmt.Errorf("bybit spot price: failed to parse response: %w", err)
+	}
+
+	if raw.RetCode != 0 {
+		return 0, fmt.Errorf("bybit spot price API error %d: %s", raw.RetCode, raw.RetMsg)
+	}
+
+	if len(raw.Result.List) == 0 {
+		return 0, fmt.Errorf("bybit spot price: empty result for %s", pair)
+	}
+
+	bid, _ := strconv.ParseFloat(raw.Result.List[0].Bid1Price, 64)
+	ask, _ := strconv.ParseFloat(raw.Result.List[0].Ask1Price, 64)
+
+	if bid == 0 && ask == 0 {
+		return 0, fmt.Errorf("bybit spot price: both bid and ask are zero for %s", pair)
+	}
+
+	return (bid + ask) / 2, nil
 }
 
 func (b *BybitAdapter) fetchTicker(ctx context.Context, pair string) (*bybitTicker, error) {

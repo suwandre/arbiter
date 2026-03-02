@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,15 +49,13 @@ func (m *MexcAdapter) Name() string {
 	return "mexc"
 }
 
-func (m *MexcAdapter) GetFundingRate(ctx context.Context, pair string) (*models.FundingRate, error) {
+func (m *MexcAdapter) GetFundingRate(ctx context.Context, pair string) (models.FundingRate, error) {
 	ticker, err := m.fetchTicker(ctx, pair)
 	if err != nil {
-		return nil, err
+		return models.FundingRate{}, err
 	}
 
-	// MEXC ticker timestamp is the current time, not next funding time.
-	// Use it as a best-effort approximation since the ticker doesn't expose nextSettleTime.
-	return &models.FundingRate{
+	return models.FundingRate{
 		Exchange:    "mexc",
 		Pair:        pair,
 		Rate:        ticker.FundingRate,
@@ -64,13 +63,13 @@ func (m *MexcAdapter) GetFundingRate(ctx context.Context, pair string) (*models.
 	}, nil
 }
 
-func (m *MexcAdapter) GetSpread(ctx context.Context, pair string) (*models.Spread, error) {
+func (m *MexcAdapter) GetSpread(ctx context.Context, pair string) (models.Spread, error) {
 	ticker, err := m.fetchTicker(ctx, pair)
 	if err != nil {
-		return nil, err
+		return models.Spread{}, err
 	}
 
-	return &models.Spread{
+	return models.Spread{
 		Exchange: "mexc",
 		Pair:     pair,
 		Bid:      ticker.Bid1,
@@ -144,22 +143,19 @@ func (m *MexcAdapter) GetOrderBookDepth(ctx context.Context, pair string) (*mode
 	}, nil
 }
 
-func (m *MexcAdapter) GetMarketStats(ctx context.Context, pair string) (*models.MarketStats, error) {
+func (m *MexcAdapter) GetMarketStats(ctx context.Context, pair string) (models.MarketStats, error) {
 	ticker, err := m.fetchTicker(ctx, pair)
 	if err != nil {
-		return nil, err
+		return models.MarketStats{}, err
 	}
 
 	contractSize := m.contractSizes[toMexcSymbol(pair)]
-
-	// HoldVol is in contracts, convert to USDT using contract size and last price.
-	// last price not directly available here so we use bid1 as approximation.
 	oiUSDT := ticker.HoldVol * contractSize * ticker.Bid1
 
-	return &models.MarketStats{
+	return models.MarketStats{
 		Exchange:     "mexc",
 		Pair:         pair,
-		Volume24h:    ticker.Amount24, // already in USDT
+		Volume24h:    ticker.Amount24,
 		OpenInterest: oiUSDT,
 	}, nil
 }
@@ -218,6 +214,49 @@ func (m *MexcAdapter) GetFundingRateHistory(ctx context.Context, pair string, li
 	}
 
 	return history, nil
+}
+
+// GetSpotPrice fetches the spot best bid/ask and returns the mid price.
+func (m *MexcAdapter) GetSpotPrice(ctx context.Context, pair string) (float64, error) {
+	url := fmt.Sprintf("https://api.mexc.com/api/v3/ticker/bookTicker?symbol=%s", pair)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, fmt.Errorf("mexc spot price: failed to build request: %w", err)
+	}
+
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("mexc spot price request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("mexc spot price: unexpected status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("mexc spot price: failed to read body: %w", err)
+	}
+
+	var raw struct {
+		BidPrice string `json:"bidPrice"`
+		AskPrice string `json:"askPrice"`
+	}
+
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return 0, fmt.Errorf("mexc spot price: failed to parse response: %w", err)
+	}
+
+	bid, _ := strconv.ParseFloat(raw.BidPrice, 64)
+	ask, _ := strconv.ParseFloat(raw.AskPrice, 64)
+
+	if bid == 0 && ask == 0 {
+		return 0, fmt.Errorf("mexc spot price: both bid and ask are zero for %s", pair)
+	}
+
+	return (bid + ask) / 2, nil
 }
 
 func parseMexcLevels(raw [][]float64, contractSize float64) []models.OrderBookLevel {

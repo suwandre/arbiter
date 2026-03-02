@@ -16,4 +16,5 @@ func SetupRoutes(app *fiber.App, scheduler *scheduler.Scheduler) {
 	v1.Get("/funding/:pair", fundingHandler.GetFundingCost)
 	v1.Get("/funding/:pair/arb", fundingHandler.GetFundingArb)
 	v1.Get("/funding/:pair/diff", fundingHandler.GetFundingDiff)
+	v1.Get("/funding/:pair/basis", fundingHandler.GetBasis)
 }

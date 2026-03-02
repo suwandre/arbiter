@@ -70,12 +70,24 @@ type FundingArbPair struct {
 type RawExchangeData struct {
 	Exchange       string
 	Pair           string
-	Funding        *FundingRate
+	Funding        FundingRate          // value: small, immutable, no need for pointer
 	FundingHistory []FundingRateHistory // last 90 periods (~30 days)
-	Spread         *Spread
-	Depth          *OrderBookDepth
-	Stats          *MarketStats
+	Spread         Spread               // value: small, immutable, no need for pointer
+	Depth          *OrderBookDepth      // pointer: large nested slices, accessed frequently
+	Stats          MarketStats          // value: small, immutable, no need for pointer
+	SpotMidPrice   float64
 	FetchedAt      time.Time
+}
+
+// BasisResult holds the spot/perp basis for a single exchange.
+type BasisResult struct {
+	Exchange     string    `json:"exchange"`
+	PerpMidPrice float64   `json:"perp_mid_price"`
+	SpotMidPrice float64   `json:"spot_mid_price"`
+	BasisRaw     float64   `json:"basis_raw"`      // perp - spot, in USDT
+	BasisPct     float64   `json:"basis_pct"`      // (perp - spot) / spot * 100
+	Annualized   float64   `json:"annualized_pct"` // basis_pct * periods_per_year
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 type ExchangeScore struct {

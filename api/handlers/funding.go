@@ -220,3 +220,35 @@ func (h *FundingHandler) GetFundingDiff(c fiber.Ctx) error {
 		"rates":          entries,
 	})
 }
+
+// Handles GET /v1/funding/:pair/basis
+// Returns the spot/perp basis for each exchange, sorted by absolute basis descending.
+// A positive basis means perp is trading at a premium to spot (contango).
+// A negative basis means perp is at a discount (backwardation).
+func (h *FundingHandler) GetBasis(c fiber.Ctx) error {
+	pair := c.Params("pair")
+	if pair == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "pair parameter is required",
+		})
+	}
+
+	log.Info().Str("pair", pair).Msg("fetching spot/perp basis")
+
+	rawData, ok := h.scheduler.GetRawData(pair)
+	if !ok || len(rawData) == 0 {
+		log.Warn().Str("pair", pair).Msg("pair not found in cache")
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error": "pair not available, check configured pairs",
+		})
+	}
+
+	results := scorer.ComputeSpotPerpBasis(rawData)
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"pair":    pair,
+		"note":    "basis_pct = (perp_mid - spot_mid) / spot_mid * 100. positive = perp premium (contango), negative = perp discount (backwardation). annualized_pct is a proxy and assumes basis is constant.",
+		"count":   len(results),
+		"results": results,
+	})
+}

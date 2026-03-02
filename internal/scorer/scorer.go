@@ -202,25 +202,65 @@ func ComputeFundingArb(rawData []*models.RawExchangeData) []*models.FundingArbPa
 	return pairs
 }
 
+// ComputeSpotPerpBasis computes the spot/perp basis for each exchange and returns
+// results sorted by absolute basis descending (largest discrepancy first).
+// Exchanges where spot price is unavailable (SpotMidPrice == 0) are excluded.
+func ComputeSpotPerpBasis(rawData []*models.RawExchangeData) []*models.BasisResult {
+	var results []*models.BasisResult
+
+	for _, raw := range rawData {
+		if raw.SpotMidPrice == 0 || raw.Depth.MidPrice == 0 {
+			continue
+		}
+
+		basisRaw := raw.Depth.MidPrice - raw.SpotMidPrice
+		basisPct := (basisRaw / raw.SpotMidPrice) * 100
+		annualized := basisPct * constants.FundingPeriodsPerYear
+
+		results = append(results, &models.BasisResult{
+			Exchange:     raw.Exchange,
+			PerpMidPrice: raw.Depth.MidPrice,
+			SpotMidPrice: raw.SpotMidPrice,
+			BasisRaw:     basisRaw,
+			BasisPct:     basisPct,
+			Annualized:   annualized,
+			UpdatedAt:    raw.FetchedAt,
+		})
+	}
+
+	// Sort by absolute basis descending — largest discrepancy first
+	for i := 0; i < len(results)-1; i++ {
+		for j := i + 1; j < len(results); j++ {
+			if math.Abs(results[j].BasisPct) > math.Abs(results[i].BasisPct) {
+				results[i], results[j] = results[j], results[i]
+			}
+		}
+	}
+
+	return results
+}
+
 // fetchRawData fetches all market data for one exchange+pair concurrently.
 func fetchRawData(ctx context.Context, ex exchange.Exchange, pair string) (*models.RawExchangeData, error) {
 	var (
 		wg      sync.WaitGroup
-		funding *models.FundingRate
+		funding models.FundingRate
 		history []models.FundingRateHistory
-		spread  *models.Spread
+		spread  models.Spread
 		depth   *models.OrderBookDepth
-		stats   *models.MarketStats
+		stats   models.MarketStats
+		spotMid float64
 
-		fundingErr, historyErr, spreadErr, depthErr, statsErr error
+		fundingErr, historyErr, spreadErr, depthErr, statsErr, spotErr error
 	)
 
-	wg.Add(5)
+	wg.Add(6)
 	go func() { defer wg.Done(); funding, fundingErr = ex.GetFundingRate(ctx, pair) }()
 	go func() { defer wg.Done(); history, historyErr = ex.GetFundingRateHistory(ctx, pair, 90) }()
 	go func() { defer wg.Done(); spread, spreadErr = ex.GetSpread(ctx, pair) }()
 	go func() { defer wg.Done(); depth, depthErr = ex.GetOrderBookDepth(ctx, pair) }()
 	go func() { defer wg.Done(); stats, statsErr = ex.GetMarketStats(ctx, pair) }()
+	go func() { defer wg.Done(); spotMid, spotErr = ex.GetSpotPrice(ctx, pair) }()
 
 	wg.Wait()
 
@@ -228,7 +268,6 @@ func fetchRawData(ctx context.Context, ex exchange.Exchange, pair string) (*mode
 		return nil, fmt.Errorf("[%s] funding rate error: %w", ex.Name(), fundingErr)
 	}
 	if historyErr != nil {
-		// Non-fatal — log and continue with empty history
 		log.Warn().Err(historyErr).Str("exchange", ex.Name()).Str("pair", pair).Msg("failed to fetch funding history, continuing without it")
 	}
 	if spreadErr != nil {
@@ -240,6 +279,9 @@ func fetchRawData(ctx context.Context, ex exchange.Exchange, pair string) (*mode
 	if statsErr != nil {
 		return nil, fmt.Errorf("[%s] market stats error: %w", ex.Name(), statsErr)
 	}
+	if spotErr != nil {
+		log.Warn().Err(spotErr).Str("exchange", ex.Name()).Str("pair", pair).Msg("failed to fetch spot price, basis will be unavailable")
+	}
 
 	log.Debug().
 		Str("exchange", ex.Name()).
@@ -249,6 +291,7 @@ func fetchRawData(ctx context.Context, ex exchange.Exchange, pair string) (*mode
 		Int("funding_history_periods", len(history)).
 		Float64("total_ask_value_usdt", totalBookValue(depth.Asks)).
 		Float64("total_bid_value_usdt", totalBookValue(depth.Bids)).
+		Float64("spot_mid_price", spotMid).
 		Msg("order book depth stats")
 
 	return &models.RawExchangeData{
@@ -259,6 +302,7 @@ func fetchRawData(ctx context.Context, ex exchange.Exchange, pair string) (*mode
 		Spread:         spread,
 		Depth:          depth,
 		Stats:          stats,
+		SpotMidPrice:   spotMid,
 		FetchedAt:      time.Now(),
 	}, nil
 }
