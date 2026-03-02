@@ -97,6 +97,29 @@ type BasisResult struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// CrossBasisOpportunity represents a delta-neutral cross-exchange basis trade:
+// buy spot on SpotExchange, short perp on PerpExchange.
+// Profitable when the perp premium on PerpExchange exceeds execution costs.
+type CrossBasisOpportunity struct {
+	SpotExchange string `json:"spot_exchange"`
+	PerpExchange string `json:"perp_exchange"`
+
+	SpotEntryPrice float64 `json:"spot_entry_price"`
+	PerpEntryPrice float64 `json:"perp_entry_price"`
+
+	GrossBasisPct float64 `json:"gross_basis_pct"`
+	SpotFeePct    float64 `json:"spot_fee_pct"`  // taker fee assumed for spot leg
+	PerpFeePct    float64 `json:"perp_fee_pct"`  // taker fee assumed for perp leg
+	NetBasisPct   float64 `json:"net_basis_pct"` // gross - spot_fee - perp_fee
+
+	AnnualizedAvg  float64 `json:"annualized_avg_pct"`
+	AnnualizedLow  float64 `json:"annualized_low_pct"`
+	AnnualizedHigh float64 `json:"annualized_high_pct"`
+
+	Viable    bool      `json:"viable"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type ExchangeScore struct {
 	Exchange       string    `json:"exchange"`
 	Pair           string    `json:"pair"`
@@ -114,4 +137,9 @@ type ExchangeScore struct {
 	CompositeScore float64   `json:"composite_score"`
 	PositionSize   float64   `json:"position_size"`
 	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+type ExchangeFees struct {
+	SpotTakerPct float64 `json:"spot_taker_pct"`
+	PerpTakerPct float64 `json:"perp_taker_pct"`
 }

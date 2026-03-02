@@ -258,6 +258,87 @@ func ComputeSpotPerpBasis(rawData []*models.RawExchangeData) []*models.BasisResu
 	return results
 }
 
+// ComputeCrossBasisOpportunities finds all cross-exchange basis trade opportunities:
+// buy spot on one exchange, short perp on another, capturing the basis differential.
+// Results are sorted by net_basis_pct descending (most profitable first).
+// All exchange combinations are evaluated; non-viable pairs (net basis <= 0) are
+// still returned but flagged with Viable: false so the caller can filter if needed.
+//
+// feeOverrides: optional per-exchange fee overrides. Key = exchange name.
+// If nil or missing for an exchange, falls back to constants.DefaultTakerFees.
+func ComputeCrossBasisOpportunities(rawData []*models.RawExchangeData, feeOverrides map[string]models.ExchangeFees) []*models.CrossBasisOpportunity {
+	var results []*models.CrossBasisOpportunity
+
+	for i := 0; i < len(rawData); i++ {
+		for j := 0; j < len(rawData); j++ {
+			if i == j {
+				continue
+			}
+
+			spotEx := rawData[i]
+			perpEx := rawData[j]
+
+			if spotEx.SpotMidPrice == 0 || perpEx.Depth.MidPrice == 0 {
+				continue
+			}
+
+			perpEntryPrice := perpEx.Depth.MidPrice
+			if len(perpEx.Depth.Bids) > 0 {
+				perpEntryPrice = perpEx.Depth.Bids[0].Price
+			}
+			spotEntryPrice := spotEx.SpotMidPrice
+
+			grossBasisPct := (perpEntryPrice - spotEntryPrice) / spotEntryPrice * 100
+
+			// Resolve fees — override takes priority, else use defaults
+			spotFees := constants.DefaultTakerFees[spotEx.Exchange]
+			if override, ok := feeOverrides[spotEx.Exchange]; ok {
+				spotFees = override
+			}
+			perpFees := constants.DefaultTakerFees[perpEx.Exchange]
+			if override, ok := feeOverrides[perpEx.Exchange]; ok {
+				perpFees = override
+			}
+
+			netBasisPct := grossBasisPct - spotFees.SpotTakerPct - perpFees.PerpTakerPct
+
+			summary := ComputeFundingSummary(perpEx)
+			annualizedAvg := summary.AvgRate30d * float64(constants.FundingPeriodsPerYear) * 100
+			annualizedLow := (summary.AvgRate30d - summary.StdDev30d) * float64(constants.FundingPeriodsPerYear) * 100
+			annualizedHigh := (summary.AvgRate30d + summary.StdDev30d) * float64(constants.FundingPeriodsPerYear) * 100
+			if annualizedLow > annualizedHigh {
+				annualizedLow, annualizedHigh = annualizedHigh, annualizedLow
+			}
+
+			results = append(results, &models.CrossBasisOpportunity{
+				SpotExchange:   spotEx.Exchange,
+				PerpExchange:   perpEx.Exchange,
+				SpotEntryPrice: spotEntryPrice,
+				PerpEntryPrice: perpEntryPrice,
+				GrossBasisPct:  grossBasisPct,
+				SpotFeePct:     spotFees.SpotTakerPct,
+				PerpFeePct:     perpFees.PerpTakerPct,
+				NetBasisPct:    netBasisPct,
+				AnnualizedAvg:  annualizedAvg,
+				AnnualizedLow:  annualizedLow,
+				AnnualizedHigh: annualizedHigh,
+				Viable:         netBasisPct > 0,
+				UpdatedAt:      time.Now(),
+			})
+		}
+	}
+
+	for i := 0; i < len(results)-1; i++ {
+		for j := i + 1; j < len(results); j++ {
+			if results[j].NetBasisPct > results[i].NetBasisPct {
+				results[i], results[j] = results[j], results[i]
+			}
+		}
+	}
+
+	return results
+}
+
 // fetchRawData fetches all market data for one exchange+pair concurrently.
 func fetchRawData(ctx context.Context, ex exchange.Exchange, pair string) (*models.RawExchangeData, error) {
 	var (
