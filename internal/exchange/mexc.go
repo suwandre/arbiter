@@ -81,7 +81,7 @@ func (m *MexcAdapter) GetSpread(ctx context.Context, pair string) (*models.Sprea
 
 func (m *MexcAdapter) GetOrderBookDepth(ctx context.Context, pair string) (*models.OrderBookDepth, error) {
 	url := fmt.Sprintf(
-		"https://contract.mexc.com/api/v1/contract/depth/%s?limit=50",
+		"https://contract.mexc.com/api/v1/contract/depth/%s?limit=1000",
 		toMexcSymbol(pair),
 	)
 

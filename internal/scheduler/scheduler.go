@@ -81,7 +81,7 @@ func (s *Scheduler) GetScores(pair string) ([]*models.ExchangeScore, bool) {
 // Fetches fresh scores for all pairs and updates the cache.
 func (s *Scheduler) refresh(ctx context.Context) {
 	for _, pair := range s.pairs {
-		scores, err := s.scorer.ScoreAll(ctx, pair)
+		scores, err := s.scorer.ScoreAll(ctx, pair, 0) // if 0 = use default $10K
 		if err != nil {
 			log.Error().Err(err).Str("pair", pair).Msg("scheduler refresh failed")
 			continue
@@ -100,13 +100,13 @@ func (s *Scheduler) refresh(ctx context.Context) {
 				Float64("composite", score.CompositeScore).
 				Float64("volume_score", score.VolumeScore).
 				Float64("oi_score", score.OIScore).
-				Float64("depth_score", score.DepthScore).
+				Float64("slippage_pct", score.SlippagePct).
+				Float64("slippage_score", score.SlippageScore).
 				Float64("spread_pct", score.SpreadPct).
 				Float64("funding_rate", score.FundingRate).
 				Float64("raw_volume_24h", score.Volume24h).
 				Float64("raw_open_interest", score.OpenInterest).
 				Msg("exchange score")
 		}
-
 	}
 }

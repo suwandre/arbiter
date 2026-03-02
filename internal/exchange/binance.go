@@ -127,7 +127,7 @@ func (b *BinanceAdapter) GetSpread(ctx context.Context, pair string) (*models.Sp
 
 // GetOrderBookDepth fetches top-of-book liquidity depth
 func (b *BinanceAdapter) GetOrderBookDepth(ctx context.Context, pair string) (*models.OrderBookDepth, error) {
-	url := fmt.Sprintf("https://fapi.binance.com/fapi/v1/depth?symbol=%s&limit=50", pair)
+	url := fmt.Sprintf("https://fapi.binance.com/fapi/v1/depth?symbol=%s&limit=1000", pair)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

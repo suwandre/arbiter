@@ -12,16 +12,15 @@ import (
 	"github.com/suwandre/arbiter/internal/models"
 )
 
-// TargetLevels controls depth weighting in the order book scorer.
-// The top N levels are weighted linearly: level 0 gets full weight (1.0),
-// level N-1 gets near-zero weight. Levels beyond N are ignored entirely.
-const TargetLevels = 20
+const (
+	TargetLevels    = 20
+	DefaultPosition = 500_000.0 // default position size in USDT
+)
 
 type Scorer struct {
 	exchanges []exchange.Exchange
 }
 
-// Holds either a score or an error for one exchange.
 type ExchangeResult struct {
 	Score *models.ExchangeScore
 	Err   error
@@ -31,32 +30,29 @@ func NewScorer(exchanges []exchange.Exchange) *Scorer {
 	return &Scorer{exchanges}
 }
 
-// Fetches data from all exchanges concurrently for a given pair
-// and returns a ranked slice of ExchangeScores.
-func (s *Scorer) ScoreAll(ctx context.Context, pair string) ([]*models.ExchangeScore, error) {
-	results := make(chan ExchangeResult, len(s.exchanges))
+func (s *Scorer) ScoreAll(ctx context.Context, pair string, positionSize float64) ([]*models.ExchangeScore, error) {
+	if positionSize <= 0 {
+		positionSize = DefaultPosition
+	}
 
+	results := make(chan ExchangeResult, len(s.exchanges))
 	var wg sync.WaitGroup
 
 	for _, ex := range s.exchanges {
 		wg.Add(1)
-
 		go func(ex exchange.Exchange) {
 			defer wg.Done()
-
-			score, err := fetchAndScore(ctx, ex, pair)
+			score, err := fetchAndScore(ctx, ex, pair, positionSize)
 			results <- ExchangeResult{Score: score, Err: err}
 		}(ex)
 	}
 
-	// Close the channel once all goroutines finish
 	go func() {
 		wg.Wait()
 		close(results)
 	}()
 
 	var scores []*models.ExchangeScore
-
 	for result := range results {
 		if result.Err != nil {
 			log.Warn().Err(result.Err).Msg("failed to score exchange, skipping")
@@ -69,17 +65,19 @@ func (s *Scorer) ScoreAll(ctx context.Context, pair string) ([]*models.ExchangeS
 		return nil, fmt.Errorf("no exchange data available for pair %s", pair)
 	}
 
-	// Normalize depth across exchanges before scoring
-	normalizeDepth(scores)
 	normalizeVolume(scores)
 	normalizeOI(scores)
+	normalizeSlippage(scores)
 
 	for _, score := range scores {
+		// Trust slippage proportional to volume — low volume = less trustworthy book
+		score.SlippageScore *= score.VolumeScore
+
 		score.CompositeScore =
-			score.VolumeScore*0.35 +
+			score.VolumeScore*0.40 +
 				(1/(1+score.SpreadPct))*0.25 +
 				score.OIScore*0.20 +
-				score.DepthScore*0.15 +
+				score.SlippageScore*0.10 +
 				(1/(1+score.FundingRate*100))*0.05
 	}
 
@@ -87,7 +85,7 @@ func (s *Scorer) ScoreAll(ctx context.Context, pair string) ([]*models.ExchangeS
 	return scores, nil
 }
 
-func fetchAndScore(ctx context.Context, ex exchange.Exchange, pair string) (*models.ExchangeScore, error) {
+func fetchAndScore(ctx context.Context, ex exchange.Exchange, pair string, positionSize float64) (*models.ExchangeScore, error) {
 	var (
 		wg      sync.WaitGroup
 		funding *models.FundingRate
@@ -124,8 +122,31 @@ func fetchAndScore(ctx context.Context, ex exchange.Exchange, pair string) (*mod
 		spreadPct = (spread.Spread / spread.Bid) * 100
 	}
 
-	weightedBid := weightedDepth(depth.Bids)
-	weightedAsk := weightedDepth(depth.Asks)
+	slippagePct := estimateSlippage(depth.Asks, depth.MidPrice, positionSize)
+
+	/// LOGGING
+	askLevels := len(depth.Asks)
+	bidLevels := len(depth.Bids)
+
+	totalAskValue := 0.0
+	for _, lvl := range depth.Asks {
+		totalAskValue += lvl.Price * lvl.Quantity
+	}
+
+	totalBidValue := 0.0
+	for _, lvl := range depth.Bids {
+		totalBidValue += lvl.Price * lvl.Quantity
+	}
+
+	log.Debug().
+		Str("exchange", ex.Name()).
+		Str("pair", pair).
+		Int("ask_levels", askLevels).
+		Int("bid_levels", bidLevels).
+		Float64("total_ask_value_usdt", totalAskValue).
+		Float64("total_bid_value_usdt", totalBidValue).
+		Msg("order book depth stats")
+		/// END OF LOGS
 
 	return &models.ExchangeScore{
 		Exchange:     ex.Name(),
@@ -134,34 +155,75 @@ func fetchAndScore(ctx context.Context, ex exchange.Exchange, pair string) (*mod
 		SpreadPct:    spreadPct,
 		RawBidDepth:  depth.BidDepth,
 		RawAskDepth:  depth.AskDepth,
+		SlippagePct:  slippagePct,
 		Volume24h:    stats.Volume24h,
 		OpenInterest: stats.OpenInterest,
-		DepthScore:   weightedBid + weightedAsk,
+		PositionSize: positionSize,
 		UpdatedAt:    time.Now(),
 	}, nil
 }
 
-// Sorts scores in-place, highest CompositeScore first.
-func rankScores(scores []*models.ExchangeScore) {
-	for i := 0; i < len(scores)-1; i++ {
-		for j := i + 1; j < len(scores); j++ {
-			if scores[j].CompositeScore > scores[i].CompositeScore {
-				scores[i], scores[j] = scores[j], scores[i]
-			}
-		}
+// Estimates slippage % for a market buy of positionUSDT,
+// walking the ask side of the book.
+func estimateSlippage(asks []models.OrderBookLevel, midPrice float64, positionUSDT float64) float64 {
+	if len(asks) == 0 || midPrice == 0 {
+		return 0
 	}
-}
 
-func weightedDepth(levels []models.OrderBookLevel) float64 {
-	total := 0.0
-	for i, lvl := range levels {
-		if i >= TargetLevels {
+	remaining := positionUSDT
+	totalCost := 0.0
+	filledBase := 0.0
+
+	for _, lvl := range asks {
+		levelValue := lvl.Price * lvl.Quantity
+		if remaining <= levelValue {
+			filledBase += remaining / lvl.Price
+			totalCost += remaining
+			remaining = 0
 			break
 		}
-		weight := 1.0 - (float64(i) / float64(TargetLevels))
-		total += lvl.Price * lvl.Quantity * weight
+		totalCost += levelValue
+		filledBase += lvl.Quantity
+		remaining -= levelValue
 	}
-	return total
+
+	if remaining > 0 && len(asks) > 0 {
+		lastPrice := asks[len(asks)-1].Price
+		filledBase += remaining / lastPrice
+		totalCost += remaining
+	}
+
+	if filledBase == 0 {
+		return 0
+	}
+
+	avgFillPrice := totalCost / filledBase
+	slippage := (avgFillPrice - midPrice) / midPrice * 100
+
+	if slippage < 0 {
+		return 0
+	}
+	return slippage
+}
+
+// Normalizes slippage so lower slippage = higher score.
+func normalizeSlippage(scores []*models.ExchangeScore) {
+	// prevent NaN from floating point near-zero values
+	const epsilon = 1e-9
+
+	max := scores[0].SlippagePct
+	for _, s := range scores[1:] {
+		if s.SlippagePct > max {
+			max = s.SlippagePct
+		}
+	}
+	for _, s := range scores {
+		if max < epsilon {
+			s.SlippageScore = 1.0
+		} else {
+			s.SlippageScore = 1.0 - math.Sqrt(s.SlippagePct/max)
+		}
+	}
 }
 
 func normalizeVolume(scores []*models.ExchangeScore) {
@@ -196,18 +258,12 @@ func normalizeOI(scores []*models.ExchangeScore) {
 	}
 }
 
-func normalizeDepth(scores []*models.ExchangeScore) {
-	max := scores[0].DepthScore
-	for _, s := range scores[1:] {
-		if s.DepthScore > max {
-			max = s.DepthScore
-		}
-	}
-	for _, s := range scores {
-		if max == 0 {
-			s.DepthScore = 0
-		} else {
-			s.DepthScore = math.Sqrt(s.DepthScore / max)
+func rankScores(scores []*models.ExchangeScore) {
+	for i := 0; i < len(scores)-1; i++ {
+		for j := i + 1; j < len(scores); j++ {
+			if scores[j].CompositeScore > scores[i].CompositeScore {
+				scores[i], scores[j] = scores[j], scores[i]
+			}
 		}
 	}
 }
