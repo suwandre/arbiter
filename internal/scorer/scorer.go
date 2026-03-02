@@ -152,27 +152,6 @@ func rankScores(scores []*models.ExchangeScore) {
 	}
 }
 
-// Normalizes depth scores so they range from 0 to 1.
-func normalizeDepth(scores []*models.ExchangeScore) {
-	minD, maxD := scores[0].DepthScore, scores[0].DepthScore
-	for _, s := range scores[1:] {
-		if s.DepthScore < minD {
-			minD = s.DepthScore
-		}
-		if s.DepthScore > maxD {
-			maxD = s.DepthScore
-		}
-	}
-
-	for _, s := range scores {
-		if maxD == minD {
-			s.DepthScore = 1.0 // all equal, give full score
-		} else {
-			s.DepthScore = (s.DepthScore - minD) / (maxD - minD)
-		}
-	}
-}
-
 func weightedDepth(levels []models.OrderBookLevel) float64 {
 	total := 0.0
 	for i, lvl := range levels {
@@ -186,39 +165,49 @@ func weightedDepth(levels []models.OrderBookLevel) float64 {
 }
 
 func normalizeVolume(scores []*models.ExchangeScore) {
-	min, max := scores[0].Volume24h, scores[0].Volume24h
+	max := scores[0].Volume24h
 	for _, s := range scores[1:] {
-		if s.Volume24h < min {
-			min = s.Volume24h
-		}
 		if s.Volume24h > max {
 			max = s.Volume24h
 		}
 	}
 	for _, s := range scores {
-		if max == min {
-			s.VolumeScore = 1.0
+		if max == 0 {
+			s.VolumeScore = 0
 		} else {
-			s.VolumeScore = math.Log1p(s.Volume24h-min) / math.Log1p(max-min)
+			s.VolumeScore = math.Sqrt(s.Volume24h / max)
 		}
 	}
 }
 
 func normalizeOI(scores []*models.ExchangeScore) {
-	min, max := scores[0].OpenInterest, scores[0].OpenInterest
+	max := scores[0].OpenInterest
 	for _, s := range scores[1:] {
-		if s.OpenInterest < min {
-			min = s.OpenInterest
-		}
 		if s.OpenInterest > max {
 			max = s.OpenInterest
 		}
 	}
 	for _, s := range scores {
-		if max == min {
-			s.OIScore = 1.0
+		if max == 0 {
+			s.OIScore = 0
 		} else {
-			s.OIScore = math.Log1p(s.OpenInterest-min) / math.Log1p(max-min)
+			s.OIScore = math.Sqrt(s.OpenInterest / max)
+		}
+	}
+}
+
+func normalizeDepth(scores []*models.ExchangeScore) {
+	max := scores[0].DepthScore
+	for _, s := range scores[1:] {
+		if s.DepthScore > max {
+			max = s.DepthScore
+		}
+	}
+	for _, s := range scores {
+		if max == 0 {
+			s.DepthScore = 0
+		} else {
+			s.DepthScore = math.Sqrt(s.DepthScore / max)
 		}
 	}
 }

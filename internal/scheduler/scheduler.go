@@ -92,5 +92,21 @@ func (s *Scheduler) refresh(ctx context.Context) {
 		s.mu.Unlock()
 
 		log.Info().Str("pair", pair).Int("exchanges", len(scores)).Msg("cache refreshed")
+
+		for _, score := range scores {
+			log.Info().
+				Str("pair", pair).
+				Str("exchange", score.Exchange).
+				Float64("composite", score.CompositeScore).
+				Float64("volume_score", score.VolumeScore).
+				Float64("oi_score", score.OIScore).
+				Float64("depth_score", score.DepthScore).
+				Float64("spread_pct", score.SpreadPct).
+				Float64("funding_rate", score.FundingRate).
+				Float64("raw_volume_24h", score.Volume24h).
+				Float64("raw_open_interest", score.OpenInterest).
+				Msg("exchange score")
+		}
+
 	}
 }
