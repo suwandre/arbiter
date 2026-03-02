@@ -6,11 +6,10 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/rs/zerolog/log"
+	"github.com/suwandre/arbiter/internal/constants"
 	"github.com/suwandre/arbiter/internal/scheduler"
 	"github.com/suwandre/arbiter/internal/scorer"
 )
-
-const fundingIntervalHours = 8.0
 
 type FundingResult struct {
 	Exchange             string  `json:"exchange"`
@@ -76,7 +75,7 @@ func (h *FundingHandler) GetFundingCost(c fiber.Ctx) error {
 	}
 
 	// Round up — partial periods still incur a full funding payment
-	fundingPeriods := math.Ceil(hours / fundingIntervalHours)
+	fundingPeriods := math.Ceil(hours / constants.FundingIntervalHours)
 
 	results := make([]FundingResult, 0, len(rawData))
 	for _, raw := range rawData {
@@ -129,5 +128,95 @@ func (h *FundingHandler) GetFundingCost(c fiber.Ctx) error {
 		"funding_periods": fundingPeriods,
 		"note":            "projected costs use 30-day average funding rate. low/high range represents ±1 standard deviation.",
 		"results":         results,
+	})
+}
+
+// Handles GET /v1/funding/:pair/arb
+// Returns all cross-exchange funding arb opportunities ranked by differential (highest first).
+// Only directional pairs where net positive funding can be captured are returned.
+func (h *FundingHandler) GetFundingArb(c fiber.Ctx) error {
+	pair := c.Params("pair")
+	if pair == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "pair parameter is required",
+		})
+	}
+
+	log.Info().Str("pair", pair).Msg("fetching funding arb opportunities")
+
+	rawData, ok := h.scheduler.GetRawData(pair)
+	if !ok || len(rawData) == 0 {
+		log.Warn().Str("pair", pair).Msg("pair not found in cache")
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error": "pair not available, check configured pairs",
+		})
+	}
+
+	arbs := scorer.ComputeFundingArb(rawData)
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"pair":          pair,
+		"note":          "differential_pct is the gross funding captured per 8h period. annualized_pct assumes 3 periods/day and does not account for execution costs or basis risk.",
+		"count":         len(arbs),
+		"opportunities": arbs,
+	})
+}
+
+// Handles GET /v1/funding/:pair/diff
+// Returns the current funding rate for each exchange sorted ascending.
+// The top entry is the best long candidate; the bottom is the best short candidate.
+func (h *FundingHandler) GetFundingDiff(c fiber.Ctx) error {
+	pair := c.Params("pair")
+	if pair == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "pair parameter is required",
+		})
+	}
+
+	log.Info().Str("pair", pair).Msg("fetching funding rate diff")
+
+	rawData, ok := h.scheduler.GetRawData(pair)
+	if !ok || len(rawData) == 0 {
+		log.Warn().Str("pair", pair).Msg("pair not found in cache")
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error": "pair not available, check configured pairs",
+		})
+	}
+
+	type rateEntry struct {
+		Exchange   string  `json:"exchange"`
+		Rate       float64 `json:"rate"`
+		RatePct    float64 `json:"rate_pct"`
+		Annualized float64 `json:"annualized_pct"`
+	}
+
+	entries := make([]rateEntry, 0, len(rawData))
+	for _, raw := range rawData {
+		entries = append(entries, rateEntry{
+			Exchange:   raw.Exchange,
+			Rate:       raw.Funding.Rate,
+			RatePct:    raw.Funding.Rate * 100,
+			Annualized: raw.Funding.Rate * 100 * constants.FundingPeriodsPerYear,
+		})
+	}
+
+	for i := 0; i < len(entries)-1; i++ {
+		for j := i + 1; j < len(entries); j++ {
+			if entries[j].Rate < entries[i].Rate {
+				entries[i], entries[j] = entries[j], entries[i]
+			}
+		}
+	}
+
+	maxSpread := 0.0
+	if len(entries) >= 2 {
+		maxSpread = (entries[len(entries)-1].Rate - entries[0].Rate) * 100
+	}
+
+	return c.Status(fiber.StatusOK).JSON(fiber.Map{
+		"pair":           pair,
+		"note":           "sorted by rate ascending. top = best long candidate, bottom = best short candidate.",
+		"max_spread_pct": maxSpread,
+		"rates":          entries,
 	})
 }

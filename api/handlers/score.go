@@ -5,8 +5,8 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/rs/zerolog/log"
+	"github.com/suwandre/arbiter/internal/constants"
 	"github.com/suwandre/arbiter/internal/scheduler"
-	"github.com/suwandre/arbiter/internal/scorer"
 )
 
 type ScoreHandler struct {
@@ -60,7 +60,7 @@ func (h *ScoreHandler) GetScores(c fiber.Ctx) error {
 
 	displayPosition := positionSize
 	if displayPosition == 0 {
-		displayPosition = scorer.DefaultPosition
+		displayPosition = constants.DefaultPositionUSDT
 	}
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{

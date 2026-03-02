@@ -55,6 +55,17 @@ type FundingRateSummary struct {
 	Periods     int     `json:"periods"` // number of data points used
 }
 
+// FundingArbPair represents the funding rate differential between two exchanges for the same pair.
+type FundingArbPair struct {
+	LongExchange  string  `json:"long_exchange"`  // exchange where you go long (lower/more negative funding = you receive or pay less)
+	ShortExchange string  `json:"short_exchange"` // exchange where you go short (higher/more positive funding = you receive)
+	LongRate      float64 `json:"long_rate"`      // current funding rate on the long exchange
+	ShortRate     float64 `json:"short_rate"`     // current funding rate on the short exchange
+	Differential  float64 `json:"differential"`   // ShortRate - LongRate (gross funding capture per period, as a fraction)
+	DiffPct       float64 `json:"diff_pct"`       // Differential * 100, for display
+	Annualized    float64 `json:"annualized"`     // DiffPct * periods_per_year (based on 8h intervals = 3/day * 365)
+}
+
 // RawExchangeData holds one full fetch of market data for a single exchange+pair.
 type RawExchangeData struct {
 	Exchange       string

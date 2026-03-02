@@ -8,13 +8,9 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"github.com/suwandre/arbiter/internal/constants"
 	"github.com/suwandre/arbiter/internal/exchange"
 	"github.com/suwandre/arbiter/internal/models"
-)
-
-const (
-	TargetLevels    = 20
-	DefaultPosition = 500_000.0
 )
 
 type Scorer struct {
@@ -71,7 +67,7 @@ func (s *Scorer) FetchAll(ctx context.Context, pair string) ([]*models.RawExchan
 // positionSize: position size in USDT. Uses DefaultPosition if <= 0.
 func (s *Scorer) ScoreAll(rawData []*models.RawExchangeData, positionSize float64, side string) ([]*models.ExchangeScore, error) {
 	if positionSize <= 0 {
-		positionSize = DefaultPosition
+		positionSize = constants.DefaultPositionUSDT
 	}
 	if side == "" {
 		side = "general"
@@ -161,6 +157,49 @@ func ComputeFundingSummary(raw *models.RawExchangeData) models.FundingRateSummar
 	summary.StdDev30d = math.Sqrt(variance / float64(len(raw.FundingHistory)))
 
 	return summary
+}
+
+// ComputeFundingArb takes raw data from all exchanges for a pair and returns all
+// directional exchange pairs ranked by funding differential (highest first).
+// A positive Differential means shorting on ShortExchange and longing on LongExchange
+// captures net positive funding per period.
+func ComputeFundingArb(rawData []*models.RawExchangeData) []*models.FundingArbPair {
+	var pairs []*models.FundingArbPair
+
+	for i := 0; i < len(rawData); i++ {
+		for j := 0; j < len(rawData); j++ {
+			if i == j {
+				continue
+			}
+			a := rawData[i]
+			b := rawData[j]
+
+			diff := b.Funding.Rate - a.Funding.Rate
+			if diff <= 0 {
+				continue
+			}
+
+			pairs = append(pairs, &models.FundingArbPair{
+				LongExchange:  a.Exchange,
+				ShortExchange: b.Exchange,
+				LongRate:      a.Funding.Rate,
+				ShortRate:     b.Funding.Rate,
+				Differential:  diff,
+				DiffPct:       diff * 100,
+				Annualized:    diff * 100 * constants.FundingPeriodsPerYear,
+			})
+		}
+	}
+
+	for i := 0; i < len(pairs)-1; i++ {
+		for j := i + 1; j < len(pairs); j++ {
+			if pairs[j].Differential > pairs[i].Differential {
+				pairs[i], pairs[j] = pairs[j], pairs[i]
+			}
+		}
+	}
+
+	return pairs
 }
 
 // fetchRawData fetches all market data for one exchange+pair concurrently.
