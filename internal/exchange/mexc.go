@@ -164,6 +164,62 @@ func (m *MexcAdapter) GetMarketStats(ctx context.Context, pair string) (*models.
 	}, nil
 }
 
+func (m *MexcAdapter) GetFundingRateHistory(ctx context.Context, pair string, limit int) ([]models.FundingRateHistory, error) {
+	url := fmt.Sprintf(
+		"https://contract.mexc.com/api/v1/contract/funding_rate/history?symbol=%s&page_num=1&page_size=%d",
+		toMexcSymbol(pair), limit,
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("mexc funding history: failed to build request: %w", err)
+	}
+
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("mexc funding history request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("mexc funding history: unexpected status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("mexc funding history: failed to read body: %w", err)
+	}
+
+	var raw struct {
+		Success bool `json:"success"`
+		Code    int  `json:"code"`
+		Data    struct {
+			ResultList []struct {
+				FundingRate float64 `json:"fundingRate"`
+				SettleTime  int64   `json:"settleTime"`
+			} `json:"resultList"`
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("mexc funding history: failed to parse response: %w", err)
+	}
+
+	if !raw.Success || raw.Code != 0 {
+		return nil, fmt.Errorf("mexc funding history API error code %d", raw.Code)
+	}
+
+	history := make([]models.FundingRateHistory, 0, len(raw.Data.ResultList))
+	for _, r := range raw.Data.ResultList {
+		history = append(history, models.FundingRateHistory{
+			Rate:      r.FundingRate,
+			Timestamp: time.UnixMilli(r.SettleTime),
+		})
+	}
+
+	return history, nil
+}
+
 func parseMexcLevels(raw [][]float64, contractSize float64) []models.OrderBookLevel {
 	levels := make([]models.OrderBookLevel, 0, len(raw))
 	for _, entry := range raw {

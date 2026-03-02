@@ -168,6 +168,70 @@ func (b *BybitAdapter) GetMarketStats(ctx context.Context, pair string) (*models
 	}, nil
 }
 
+func (b *BybitAdapter) GetFundingRateHistory(ctx context.Context, pair string, limit int) ([]models.FundingRateHistory, error) {
+	url := fmt.Sprintf(
+		"https://api.bybit.com/v5/market/funding/history?category=linear&symbol=%s&limit=%d",
+		pair, limit,
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("bybit funding history: failed to build request: %w", err)
+	}
+
+	resp, err := b.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("bybit funding history request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("bybit funding history: unexpected status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("bybit funding history: failed to read body: %w", err)
+	}
+
+	var raw struct {
+		RetCode int    `json:"retCode"`
+		RetMsg  string `json:"retMsg"`
+		Result  struct {
+			List []struct {
+				FundingRate          string `json:"fundingRate"`
+				FundingRateTimestamp string `json:"fundingRateTimestamp"`
+			} `json:"list"`
+		} `json:"result"`
+	}
+
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("bybit funding history: failed to parse response: %w", err)
+	}
+
+	if raw.RetCode != 0 {
+		return nil, fmt.Errorf("bybit funding history API error %d: %s", raw.RetCode, raw.RetMsg)
+	}
+
+	history := make([]models.FundingRateHistory, 0, len(raw.Result.List))
+	for _, r := range raw.Result.List {
+		rate, err := strconv.ParseFloat(r.FundingRate, 64)
+		if err != nil {
+			continue
+		}
+		tsMs, err := strconv.ParseInt(r.FundingRateTimestamp, 10, 64)
+		if err != nil {
+			continue
+		}
+		history = append(history, models.FundingRateHistory{
+			Rate:      rate,
+			Timestamp: time.UnixMilli(tsMs),
+		})
+	}
+
+	return history, nil
+}
+
 func (b *BybitAdapter) fetchTicker(ctx context.Context, pair string) (*bybitTicker, error) {
 	url := fmt.Sprintf(
 		"https://api.bybit.com/v5/market/tickers?category=linear&symbol=%s",

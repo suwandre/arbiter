@@ -274,3 +274,53 @@ func (b *BinanceAdapter) GetMarketStats(ctx context.Context, pair string) (*mode
 		OpenInterest: or.oiBTC * tr.vwap, // convert BTC → USDT using VWAP
 	}, nil
 }
+
+func (b *BinanceAdapter) GetFundingRateHistory(ctx context.Context, pair string, limit int) ([]models.FundingRateHistory, error) {
+	url := fmt.Sprintf(
+		"https://fapi.binance.com/fapi/v1/fundingRate?symbol=%s&limit=%d",
+		pair, limit,
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("binance funding history: failed to build request: %w", err)
+	}
+
+	resp, err := b.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("binance funding history request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("binance funding history: unexpected status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("binance funding history: failed to read body: %w", err)
+	}
+
+	var raw []struct {
+		FundingRate string `json:"fundingRate"`
+		FundingTime int64  `json:"fundingTime"`
+	}
+
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("binance funding history: failed to parse response: %w", err)
+	}
+
+	history := make([]models.FundingRateHistory, 0, len(raw))
+	for _, r := range raw {
+		rate, err := strconv.ParseFloat(r.FundingRate, 64)
+		if err != nil {
+			continue
+		}
+		history = append(history, models.FundingRateHistory{
+			Rate:      rate,
+			Timestamp: time.UnixMilli(r.FundingTime),
+		})
+	}
+
+	return history, nil
+}

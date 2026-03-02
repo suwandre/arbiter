@@ -85,6 +85,15 @@ func (s *Scheduler) GetScores(pair string, side string, positionSize float64) ([
 	return scores, true
 }
 
+// GetRawData returns the cached raw exchange data for a pair.
+func (s *Scheduler) GetRawData(pair string) ([]*models.RawExchangeData, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	data, ok := s.cache[pair]
+	return data, ok
+}
+
 // refresh fetches raw data for all pairs and updates the cache.
 // Only makes exchange API calls — no scoring happens here.
 func (s *Scheduler) refresh(ctx context.Context) {

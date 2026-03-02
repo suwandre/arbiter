@@ -122,20 +122,63 @@ func (s *Scorer) ScoreAll(rawData []*models.RawExchangeData, positionSize float6
 	return scores, nil
 }
 
+// ComputeFundingSummary derives stats from historical funding data for a single exchange.
+func ComputeFundingSummary(raw *models.RawExchangeData) models.FundingRateSummary {
+	summary := models.FundingRateSummary{
+		CurrentRate: raw.Funding.Rate,
+		Periods:     len(raw.FundingHistory),
+	}
+
+	if len(raw.FundingHistory) == 0 {
+		return summary
+	}
+
+	sum := 0.0
+	min := raw.FundingHistory[0].Rate
+	max := raw.FundingHistory[0].Rate
+
+	for _, h := range raw.FundingHistory {
+		sum += h.Rate
+		if h.Rate < min {
+			min = h.Rate
+		}
+		if h.Rate > max {
+			max = h.Rate
+		}
+	}
+
+	avg := sum / float64(len(raw.FundingHistory))
+	summary.AvgRate30d = avg
+	summary.MinRate30d = min
+	summary.MaxRate30d = max
+
+	// Standard deviation
+	variance := 0.0
+	for _, h := range raw.FundingHistory {
+		diff := h.Rate - avg
+		variance += diff * diff
+	}
+	summary.StdDev30d = math.Sqrt(variance / float64(len(raw.FundingHistory)))
+
+	return summary
+}
+
 // fetchRawData fetches all market data for one exchange+pair concurrently.
 func fetchRawData(ctx context.Context, ex exchange.Exchange, pair string) (*models.RawExchangeData, error) {
 	var (
 		wg      sync.WaitGroup
 		funding *models.FundingRate
+		history []models.FundingRateHistory
 		spread  *models.Spread
 		depth   *models.OrderBookDepth
 		stats   *models.MarketStats
 
-		fundingErr, spreadErr, depthErr, statsErr error
+		fundingErr, historyErr, spreadErr, depthErr, statsErr error
 	)
 
-	wg.Add(4)
+	wg.Add(5)
 	go func() { defer wg.Done(); funding, fundingErr = ex.GetFundingRate(ctx, pair) }()
+	go func() { defer wg.Done(); history, historyErr = ex.GetFundingRateHistory(ctx, pair, 90) }()
 	go func() { defer wg.Done(); spread, spreadErr = ex.GetSpread(ctx, pair) }()
 	go func() { defer wg.Done(); depth, depthErr = ex.GetOrderBookDepth(ctx, pair) }()
 	go func() { defer wg.Done(); stats, statsErr = ex.GetMarketStats(ctx, pair) }()
@@ -144,6 +187,10 @@ func fetchRawData(ctx context.Context, ex exchange.Exchange, pair string) (*mode
 
 	if fundingErr != nil {
 		return nil, fmt.Errorf("[%s] funding rate error: %w", ex.Name(), fundingErr)
+	}
+	if historyErr != nil {
+		// Non-fatal — log and continue with empty history
+		log.Warn().Err(historyErr).Str("exchange", ex.Name()).Str("pair", pair).Msg("failed to fetch funding history, continuing without it")
 	}
 	if spreadErr != nil {
 		return nil, fmt.Errorf("[%s] spread error: %w", ex.Name(), spreadErr)
@@ -155,24 +202,25 @@ func fetchRawData(ctx context.Context, ex exchange.Exchange, pair string) (*mode
 		return nil, fmt.Errorf("[%s] market stats error: %w", ex.Name(), statsErr)
 	}
 
-	// Debug logging
 	log.Debug().
 		Str("exchange", ex.Name()).
 		Str("pair", pair).
 		Int("ask_levels", len(depth.Asks)).
 		Int("bid_levels", len(depth.Bids)).
+		Int("funding_history_periods", len(history)).
 		Float64("total_ask_value_usdt", totalBookValue(depth.Asks)).
 		Float64("total_bid_value_usdt", totalBookValue(depth.Bids)).
 		Msg("order book depth stats")
 
 	return &models.RawExchangeData{
-		Exchange:  ex.Name(),
-		Pair:      pair,
-		Funding:   funding,
-		Spread:    spread,
-		Depth:     depth,
-		Stats:     stats,
-		FetchedAt: time.Now(),
+		Exchange:       ex.Name(),
+		Pair:           pair,
+		Funding:        funding,
+		FundingHistory: history,
+		Spread:         spread,
+		Depth:          depth,
+		Stats:          stats,
+		FetchedAt:      time.Now(),
 	}, nil
 }
 

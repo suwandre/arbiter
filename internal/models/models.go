@@ -39,16 +39,32 @@ type MarketStats struct {
 	OpenInterest float64 // open interest in USDT
 }
 
+// FundingRateHistory represents a single historical funding rate record.
+type FundingRateHistory struct {
+	Rate      float64   `json:"rate"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// FundingRateSummary holds computed stats from historical funding data.
+type FundingRateSummary struct {
+	CurrentRate float64 `json:"current_rate"`
+	AvgRate30d  float64 `json:"avg_rate_30d"` // 30-day average
+	StdDev30d   float64 `json:"std_dev_30d"`  // standard deviation — indicates volatility
+	MinRate30d  float64 `json:"min_rate_30d"`
+	MaxRate30d  float64 `json:"max_rate_30d"`
+	Periods     int     `json:"periods"` // number of data points used
+}
+
 // RawExchangeData holds one full fetch of market data for a single exchange+pair.
-// Fetched once per refresh cycle, then scored multiple times for different sides.
 type RawExchangeData struct {
-	Exchange  string
-	Pair      string
-	Funding   *FundingRate
-	Spread    *Spread
-	Depth     *OrderBookDepth
-	Stats     *MarketStats
-	FetchedAt time.Time
+	Exchange       string
+	Pair           string
+	Funding        *FundingRate
+	FundingHistory []FundingRateHistory // last 90 periods (~30 days)
+	Spread         *Spread
+	Depth          *OrderBookDepth
+	Stats          *MarketStats
+	FetchedAt      time.Time
 }
 
 type ExchangeScore struct {

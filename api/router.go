@@ -8,8 +8,10 @@ import (
 
 func SetupRoutes(app *fiber.App, scheduler *scheduler.Scheduler) {
 	scoreHandler := handlers.NewScoreHandler(scheduler)
+	fundingHandler := handlers.NewFundingHandler(scheduler)
 
 	v1 := app.Group("/v1")
 
 	v1.Get("/scores/:pair", scoreHandler.GetScores)
+	v1.Get("/funding/:pair", fundingHandler.GetFundingCost)
 }
