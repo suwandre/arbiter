@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
@@ -43,11 +44,13 @@ func (m *MexcAdapter) StreamOrderBook(ctx context.Context, pair string, out chan
 		contractSize = 1.0
 	}
 
-	// Seed local book from REST snapshot first
-	snapshot, err := m.GetOrderBookDepth(ctx, pair)
+	snapCtx, snapCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer snapCancel()
+	snapshot, err := m.GetOrderBookDepth(snapCtx, pair)
 	if err != nil {
 		return fmt.Errorf("mexc StreamOrderBook: initial snapshot failed: %w", err)
 	}
+
 	bids := levelMapFromSlice(snapshot.Bids)
 	asks := levelMapFromSlice(snapshot.Asks)
 

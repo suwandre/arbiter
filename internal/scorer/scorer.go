@@ -571,7 +571,7 @@ func fetchRawData(ctx context.Context, ex exchange.Exchange, pair string) (*mode
 // scoreFromRaw computes an ExchangeScore from raw data. Pure computation — no API calls.
 func scoreFromRaw(raw *models.RawExchangeData, positionSize float64, side string, mode string) *models.ExchangeScore {
 	spreadPct := 0.0
-	if raw.Spread.Bid > 0 {
+	if raw.Spread.Bid > 0 && raw.Spread.Ask > 0 && raw.Spread.Ask > raw.Spread.Bid {
 		spreadPct = (raw.Spread.Spread / raw.Spread.Bid) * 100
 	}
 

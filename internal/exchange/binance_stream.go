@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
@@ -22,15 +23,21 @@ func (b *BinanceAdapter) StreamOrderBook(ctx context.Context, pair string, out c
 
 	log.Info().Str("exchange", "binance").Str("pair", pair).Msg("order book stream connected")
 
-	// Seed with a REST snapshot first so we have a full book before applying diffs
-	snapshot, err := b.GetOrderBookDepth(ctx, pair)
+	snapCtx, snapCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer snapCancel()
+	snapshot, err := b.GetOrderBookDepth(snapCtx, pair)
 	if err != nil {
 		return fmt.Errorf("binance StreamOrderBook: initial snapshot failed: %w", err)
 	}
 
-	// local book state
 	bids := levelMapFromSlice(snapshot.Bids)
 	asks := levelMapFromSlice(snapshot.Asks)
+
+	// If snapshot came back empty, log a warning but continue —
+	// the book will build up from diffs
+	if len(bids) == 0 || len(asks) == 0 {
+		log.Warn().Str("exchange", "binance").Str("pair", pair).Msg("order book snapshot empty, book will build from diffs")
+	}
 
 	type depthEvent struct {
 		EventType json.RawMessage `json:"e"`
@@ -111,6 +118,11 @@ func (b *BinanceAdapter) StreamTicker(ctx context.Context, pair string, out chan
 
 		bid, _ := strconv.ParseFloat(event.BidPrice, 64)
 		ask, _ := strconv.ParseFloat(event.AskPrice, 64)
+
+		// Reject malformed ticks
+		if bid <= 0 || ask <= 0 || ask < bid {
+			continue
+		}
 
 		select {
 		case out <- models.Spread{
