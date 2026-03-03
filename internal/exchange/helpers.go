@@ -2,6 +2,7 @@
 package exchange
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 
@@ -96,20 +97,12 @@ func sortedLevels(book map[float64]float64, descending bool) []models.OrderBookL
 	for price, qty := range book {
 		levels = append(levels, models.OrderBookLevel{Price: price, Quantity: qty})
 	}
-	// Simple sort
-	for i := 0; i < len(levels)-1; i++ {
-		for j := i + 1; j < len(levels); j++ {
-			swap := false
-			if descending && levels[j].Price > levels[i].Price {
-				swap = true
-			} else if !descending && levels[j].Price < levels[i].Price {
-				swap = true
-			}
-			if swap {
-				levels[i], levels[j] = levels[j], levels[i]
-			}
+	sort.Slice(levels, func(i, j int) bool {
+		if descending {
+			return levels[i].Price > levels[j].Price
 		}
-	}
+		return levels[i].Price < levels[j].Price
+	})
 	return levels
 }
 
