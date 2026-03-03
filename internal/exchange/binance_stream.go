@@ -95,8 +95,9 @@ func (b *BinanceAdapter) StreamTicker(ctx context.Context, pair string, out chan
 	log.Info().Str("exchange", "binance").Str("pair", pair).Msg("ticker stream connected")
 
 	type tickerEvent struct {
-		BidPrice string `json:"b"`
-		AskPrice string `json:"a"`
+		EventType json.RawMessage `json:"e"`
+		BidPrice  string          `json:"b"`
+		AskPrice  string          `json:"a"`
 	}
 
 	for {
@@ -116,10 +117,14 @@ func (b *BinanceAdapter) StreamTicker(ctx context.Context, pair string, out chan
 			continue
 		}
 
+		// Only process genuine bookTicker events
+		if string(event.EventType) != `"bookTicker"` {
+			continue
+		}
+
 		bid, _ := strconv.ParseFloat(event.BidPrice, 64)
 		ask, _ := strconv.ParseFloat(event.AskPrice, 64)
 
-		// Reject malformed ticks
 		if bid <= 0 || ask <= 0 || ask < bid {
 			continue
 		}
