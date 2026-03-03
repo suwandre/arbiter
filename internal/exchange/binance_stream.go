@@ -33,9 +33,9 @@ func (b *BinanceAdapter) StreamOrderBook(ctx context.Context, pair string, out c
 	asks := levelMapFromSlice(snapshot.Asks)
 
 	type depthEvent struct {
-		EventType string     `json:"e"`
-		Bids      [][]string `json:"b"`
-		Asks      [][]string `json:"a"`
+		EventType json.RawMessage `json:"e"`
+		Bids      [][]string      `json:"b"`
+		Asks      [][]string      `json:"a"`
 	}
 
 	for {
@@ -56,8 +56,8 @@ func (b *BinanceAdapter) StreamOrderBook(ctx context.Context, pair string, out c
 			continue
 		}
 
-		// Skip non-depth messages (subscription acks, heartbeats)
-		if event.EventType != "depthUpdate" {
+		// Skip non-depth messages — EventType may be a number in ack/heartbeat messages
+		if string(event.EventType) != `"depthUpdate"` {
 			continue
 		}
 
