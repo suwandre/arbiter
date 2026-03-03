@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/rs/zerolog/log"
@@ -19,7 +20,7 @@ func NewScoreHandler(data stream.DataSource, sc *scorer.Scorer) *ScoreHandler {
 	return &ScoreHandler{data: data, scorer: sc}
 }
 
-// Handles GET /v1/scores/:pair?side=general|long|short&position=500000
+// GET /v1/scores/:pair?side=general|long|short&position=500000&mode=entry_long
 func (h *ScoreHandler) GetScores(c fiber.Ctx) error {
 	pair := c.Params("pair")
 	if pair == "" {
@@ -32,6 +33,13 @@ func (h *ScoreHandler) GetScores(c fiber.Ctx) error {
 	if side != "general" && side != "long" && side != "short" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "side must be one of: general, long, short",
+		})
+	}
+
+	mode, ok := scorer.ParseScoringMode(c.Query("mode", ""))
+	if !ok {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "invalid mode, must be one of: " + strings.Join(scorer.ValidScoringModes(), ", "),
 		})
 	}
 
@@ -49,20 +57,21 @@ func (h *ScoreHandler) GetScores(c fiber.Ctx) error {
 	log.Info().
 		Str("pair", pair).
 		Str("side", side).
+		Str("mode", string(mode)).
 		Float64("position_size", positionSize).
 		Msg("fetching scores")
 
 	rawData, ok := h.data.GetRawData(pair)
 	if !ok || len(rawData) == 0 {
-		log.Warn().Str("pair", pair).Str("side", side).Msg("pair not found in cache")
+		log.Warn().Str("pair", pair).Msg("pair not found in cache")
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 			"error": "pair not available, check configured pairs",
 		})
 	}
 
-	scores, err := h.scorer.ScoreAll(rawData, positionSize, side)
+	scores, err := h.scorer.ScoreAll(rawData, positionSize, side, mode)
 	if err != nil {
-		log.Error().Err(err).Str("pair", pair).Str("side", side).Msg("scoring failed")
+		log.Error().Err(err).Str("pair", pair).Str("mode", string(mode)).Msg("scoring failed")
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": "scoring failed",
 		})
@@ -76,6 +85,7 @@ func (h *ScoreHandler) GetScores(c fiber.Ctx) error {
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"pair":          pair,
 		"side":          side,
+		"mode":          string(mode),
 		"position_size": displayPosition,
 		"scores":        scores,
 	})

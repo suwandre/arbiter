@@ -124,12 +124,14 @@ type ExchangeScore struct {
 	Exchange       string    `json:"exchange"`
 	Pair           string    `json:"pair"`
 	Side           string    `json:"side"` // "long", "short", or "general"
+	Mode           string    `json:"mode"`
 	FundingRate    float64   `json:"funding_rate"`
 	SpreadPct      float64   `json:"spread_pct"`
 	RawBidDepth    float64   `json:"raw_bid_depth"`
 	RawAskDepth    float64   `json:"raw_ask_depth"`
 	SlippagePct    float64   `json:"slippage_pct"`   // raw estimated slippage %
 	SlippageScore  float64   `json:"slippage_score"` // normalized, higher = better
+	BidDepthScore  float64   `json:"bid_depth_score"`
 	Volume24h      float64   `json:"volume_24h"`
 	OpenInterest   float64   `json:"open_interest"`
 	VolumeScore    float64   `json:"volume_score"`

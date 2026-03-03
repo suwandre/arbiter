@@ -14,15 +14,15 @@ type Scheduler struct {
 	scorer   *scorer.Scorer
 	pairs    []string
 	interval time.Duration
-	cache    map[string][]*models.RawExchangeData // pair -> raw data per exchange
+	cache    map[string][]*models.RawExchangeData
 	mu       sync.RWMutex
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 }
 
-func NewScheduler(scorer *scorer.Scorer, pairs []string, interval time.Duration) *Scheduler {
+func NewScheduler(sc *scorer.Scorer, pairs []string, interval time.Duration) *Scheduler {
 	return &Scheduler{
-		scorer:   scorer,
+		scorer:   sc,
 		pairs:    pairs,
 		interval: interval,
 		cache:    make(map[string][]*models.RawExchangeData),
@@ -65,8 +65,6 @@ func (s *Scheduler) Stop() {
 
 // GetScores returns scored results for a pair, side, and position size.
 // Scores are derived from cached raw data — no API calls.
-// side: "general", "long", or "short".
-// positionSize: position size in USDT. Uses DefaultPosition if <= 0.
 func (s *Scheduler) GetScores(pair string, side string, positionSize float64) ([]*models.ExchangeScore, bool) {
 	s.mu.RLock()
 	rawData, ok := s.cache[pair]
@@ -76,7 +74,7 @@ func (s *Scheduler) GetScores(pair string, side string, positionSize float64) ([
 		return nil, false
 	}
 
-	scores, err := s.scorer.ScoreAll(rawData, positionSize, side)
+	scores, err := s.scorer.ScoreAll(rawData, positionSize, side, scorer.ModeGeneral) // ← mode added
 	if err != nil {
 		log.Error().Err(err).Str("pair", pair).Str("side", side).Msg("scoring failed")
 		return nil, false
@@ -95,7 +93,6 @@ func (s *Scheduler) GetRawData(pair string) ([]*models.RawExchangeData, bool) {
 }
 
 // refresh fetches raw data for all pairs and updates the cache.
-// Only makes exchange API calls — no scoring happens here.
 func (s *Scheduler) refresh(ctx context.Context) {
 	for _, pair := range s.pairs {
 		rawData, err := s.scorer.FetchAll(ctx, pair)
@@ -110,8 +107,8 @@ func (s *Scheduler) refresh(ctx context.Context) {
 
 		log.Info().Str("pair", pair).Int("exchanges", len(rawData)).Msg("cache refreshed")
 
-		// Log scores for general side for observability
-		scores, err := s.scorer.ScoreAll(rawData, 0, "general")
+		// Log scores at general mode for observability only
+		scores, err := s.scorer.ScoreAll(rawData, 0, "general", scorer.ModeGeneral) // ← mode added
 		if err != nil {
 			log.Error().Err(err).Str("pair", pair).Msg("failed to score for logging")
 			continue

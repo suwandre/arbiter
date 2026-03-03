@@ -13,6 +13,176 @@ import (
 	"github.com/suwandre/arbiter/internal/models"
 )
 
+// ScoringMode identifies which use-case weight profile to apply.
+type ScoringMode string
+
+const (
+	ModeEntryLong      ScoringMode = "entry_long"
+	ModeEntryShort     ScoringMode = "entry_short"
+	ModeLargePosition  ScoringMode = "large_position"
+	ModeSmallPosition  ScoringMode = "small_position"
+	ModeOvernightLong  ScoringMode = "overnight_long"
+	ModeOvernightShort ScoringMode = "overnight_short"
+	ModeExitFast       ScoringMode = "exit_fast"
+	ModeGeneral        ScoringMode = "general"
+)
+
+// ScoreWeights defines how much each signal contributes to the composite score.
+// All weights must sum to 1.0.
+type ScoreWeights struct {
+	Volume   float64 // 24h volume (normalised)
+	Spread   float64 // bid/ask spread (lower is better)
+	OI       float64 // open interest (normalised)
+	Slippage float64 // estimated market impact (lower is better)
+	Funding  float64 // funding rate component (side-adjusted)
+	BidDepth float64 // raw bid-side depth (relevant for exit / large position)
+}
+
+// weightProfiles maps each ScoringMode to its weight set.
+// Rationale per profile:
+//
+//	entry_long / entry_short
+//	  Balanced entry. Spread and slippage matter for entry quality,
+//	  volume/OI give confidence in liquidity depth.
+//	  Funding is a mild tiebreaker — you care but it's not the primary driver.
+//
+//	large_position
+//	  Slippage and depth dominate — a large order needs a deep book.
+//	  Spread matters less since the fill will walk the book anyway.
+//	  Funding is nearly irrelevant for a single entry decision.
+//
+//	small_position
+//	  Spread dominates — a small order fills at or near the top of book.
+//	  Slippage is essentially irrelevant at small size.
+//	  Volume/OI still provide some confidence signal.
+//
+//	overnight_long / overnight_short
+//	  Funding is the primary cost of carry for multi-day holds.
+//	  Everything else is a minor tiebreaker.
+//
+//	exit_fast
+//	  Bid depth and slippage on the exit side dominate — you need to
+//	  get out NOW at minimal impact. Funding is irrelevant.
+//
+//	general
+//	  Balanced default. Same as the previous hardcoded formula so
+//	  existing callers without a mode param see identical results.
+var weightProfiles = map[ScoringMode]ScoreWeights{
+	ModeEntryLong: {
+		Volume:   0.25,
+		Spread:   0.30,
+		OI:       0.20,
+		Slippage: 0.20,
+		Funding:  0.05,
+		BidDepth: 0.00,
+	},
+	ModeEntryShort: {
+		Volume:   0.25,
+		Spread:   0.30,
+		OI:       0.20,
+		Slippage: 0.20,
+		Funding:  0.05,
+		BidDepth: 0.00,
+	},
+	ModeLargePosition: {
+		Volume:   0.15,
+		Spread:   0.05,
+		OI:       0.20,
+		Slippage: 0.40,
+		Funding:  0.00,
+		BidDepth: 0.20,
+	},
+	ModeSmallPosition: {
+		Volume:   0.20,
+		Spread:   0.55,
+		OI:       0.15,
+		Slippage: 0.05,
+		Funding:  0.05,
+		BidDepth: 0.00,
+	},
+	ModeOvernightLong: {
+		Volume:   0.05,
+		Spread:   0.05,
+		OI:       0.05,
+		Slippage: 0.05,
+		Funding:  0.80,
+		BidDepth: 0.00,
+	},
+	ModeOvernightShort: {
+		Volume:   0.05,
+		Spread:   0.05,
+		OI:       0.05,
+		Slippage: 0.05,
+		Funding:  0.80,
+		BidDepth: 0.00,
+	},
+	ModeExitFast: {
+		Volume:   0.10,
+		Spread:   0.10,
+		OI:       0.05,
+		Slippage: 0.35,
+		Funding:  0.00,
+		BidDepth: 0.40,
+	},
+	ModeGeneral: {
+		Volume:   0.40,
+		Spread:   0.25,
+		OI:       0.20,
+		Slippage: 0.10,
+		Funding:  0.05,
+		BidDepth: 0.00,
+	},
+}
+
+// ParseScoringMode converts a raw query param string into a ScoringMode.
+// Returns ModeGeneral and false if the value is unrecognised.
+func ParseScoringMode(raw string) (ScoringMode, bool) {
+	switch ScoringMode(raw) {
+	case ModeEntryLong, ModeEntryShort, ModeLargePosition, ModeSmallPosition,
+		ModeOvernightLong, ModeOvernightShort, ModeExitFast, ModeGeneral:
+		return ScoringMode(raw), true
+	case "":
+		return ModeGeneral, true
+	default:
+		return ModeGeneral, false
+	}
+}
+
+// ValidScoringModes returns all accepted mode strings for use in error messages.
+func ValidScoringModes() []string {
+	return []string{
+		string(ModeEntryLong),
+		string(ModeEntryShort),
+		string(ModeLargePosition),
+		string(ModeSmallPosition),
+		string(ModeOvernightLong),
+		string(ModeOvernightShort),
+		string(ModeExitFast),
+		string(ModeGeneral),
+	}
+}
+
+// sideForMode derives the order book side to walk from the scoring mode.
+// Modes that imply a direction override the caller-supplied side.
+func sideForMode(mode ScoringMode, side string) string {
+	switch mode {
+	case ModeEntryLong, ModeOvernightLong:
+		return "long"
+	case ModeEntryShort, ModeOvernightShort:
+		return "short"
+	case ModeExitFast:
+		// Exiting a long = sell into bids; treat as short-side walk.
+		// Caller should pass side=long to indicate they are exiting a long.
+		// We flip it here so the order book walk uses the bid side.
+		if side == "long" {
+			return "short"
+		}
+		return "long"
+	default:
+		return side
+	}
+}
+
 type Scorer struct {
 	exchanges []exchange.Exchange
 }
@@ -27,7 +197,6 @@ func NewScorer(exchanges []exchange.Exchange) *Scorer {
 }
 
 // FetchAll fetches raw market data from all exchanges for a given pair concurrently.
-// This is the only function that makes exchange API calls.
 func (s *Scorer) FetchAll(ctx context.Context, pair string) ([]*models.RawExchangeData, error) {
 	results := make(chan fetchResult, len(s.exchanges))
 	var wg sync.WaitGroup
@@ -63,55 +232,69 @@ func (s *Scorer) FetchAll(ctx context.Context, pair string) ([]*models.RawExchan
 }
 
 // ScoreAll derives scores from already-fetched raw data. No API calls.
-// side: "long", "short", or "general" (default if empty).
-// positionSize: position size in USDT. Uses DefaultPosition if <= 0.
-func (s *Scorer) ScoreAll(rawData []*models.RawExchangeData, positionSize float64, side string) ([]*models.ExchangeScore, error) {
+// mode: scoring profile to apply (see ScoringMode constants). Defaults to ModeGeneral.
+// side: "long", "short", or "general" — used for funding direction and order book walk
+//
+//	when the mode does not imply a fixed side.
+//
+// positionSize: position size in USDT. Uses DefaultPositionUSDT if <= 0.
+func (s *Scorer) ScoreAll(rawData []*models.RawExchangeData, positionSize float64, side string, mode ScoringMode) ([]*models.ExchangeScore, error) {
 	if positionSize <= 0 {
 		positionSize = constants.DefaultPositionUSDT
 	}
 	if side == "" {
 		side = "general"
 	}
+	if mode == "" {
+		mode = ModeGeneral
+	}
 
 	if len(rawData) == 0 {
 		return nil, fmt.Errorf("no raw data provided to ScoreAll")
 	}
 
+	weights, ok := weightProfiles[mode]
+	if !ok {
+		weights = weightProfiles[ModeGeneral]
+	}
+
+	// Resolve the effective order book side to walk.
+	effectiveSide := sideForMode(mode, side)
+
 	scores := make([]*models.ExchangeScore, 0, len(rawData))
 	for _, raw := range rawData {
-		scores = append(scores, scoreFromRaw(raw, positionSize, side))
+		scores = append(scores, scoreFromRaw(raw, positionSize, effectiveSide, string(mode)))
 	}
 
 	normalizeVolume(scores)
 	normalizeOI(scores)
 	normalizeSlippage(scores)
+	normalizeBidDepth(scores)
 
 	for _, score := range scores {
-		// Trust slippage proportional to volume — low volume = less trustworthy book
+		// Slippage trustworthiness scales with volume
 		score.SlippageScore *= score.VolumeScore
 
-		// Funding rate component depends on side:
-		// - Long: penalize positive funding (you pay), reward negative (you receive)
-		// - Short: penalize negative funding (you pay), reward positive (you receive)
-		// - General: same as long — mild penalty for positive funding
+		// Funding component is side-sensitive
 		var fundingComponent float64
-		switch side {
+		switch effectiveSide {
 		case "short":
 			denom := 1.0 - score.FundingRate*100
 			if denom < 0.01 {
-				denom = 0.01 // clamp to avoid division by zero
+				denom = 0.01
 			}
 			fundingComponent = 1.0 / denom
-		default: // "long" or "general"
+		default: // long or general
 			fundingComponent = 1.0 / (1.0 + score.FundingRate*100)
 		}
 
 		score.CompositeScore =
-			score.VolumeScore*0.40 +
-				(1/(1+score.SpreadPct))*0.25 +
-				score.OIScore*0.20 +
-				score.SlippageScore*0.10 +
-				fundingComponent*0.05
+			score.VolumeScore*weights.Volume +
+				(1/(1+score.SpreadPct))*weights.Spread +
+				score.OIScore*weights.OI +
+				score.SlippageScore*weights.Slippage +
+				fundingComponent*weights.Funding +
+				score.BidDepthScore*weights.BidDepth
 	}
 
 	rankScores(scores)
@@ -148,7 +331,6 @@ func ComputeFundingSummary(raw *models.RawExchangeData) models.FundingRateSummar
 	summary.MinRate30d = min
 	summary.MaxRate30d = max
 
-	// Standard deviation
 	variance := 0.0
 	for _, h := range raw.FundingHistory {
 		diff := h.Rate - avg
@@ -159,10 +341,7 @@ func ComputeFundingSummary(raw *models.RawExchangeData) models.FundingRateSummar
 	return summary
 }
 
-// ComputeFundingArb takes raw data from all exchanges for a pair and returns all
-// directional exchange pairs ranked by funding differential (highest first).
-// A positive Differential means shorting on ShortExchange and longing on LongExchange
-// captures net positive funding per period.
+// ComputeFundingArb returns all directional exchange pairs ranked by funding differential.
 func ComputeFundingArb(rawData []*models.RawExchangeData) []*models.FundingArbPair {
 	var pairs []*models.FundingArbPair
 
@@ -202,11 +381,7 @@ func ComputeFundingArb(rawData []*models.RawExchangeData) []*models.FundingArbPa
 	return pairs
 }
 
-// ComputeSpotPerpBasis computes the spot/perp basis for each exchange and returns
-// results sorted by absolute basis descending (largest discrepancy first).
-// Exchanges where spot price is unavailable (SpotMidPrice == 0) are excluded.
-// Annualized estimates use 30d avg funding rate history rather than the current
-// snapshot, since basis is not expected to remain constant.
+// ComputeSpotPerpBasis computes the spot/perp basis per exchange, sorted by absolute basis descending.
 func ComputeSpotPerpBasis(rawData []*models.RawExchangeData) []*models.BasisResult {
 	var results []*models.BasisResult
 
@@ -218,16 +393,12 @@ func ComputeSpotPerpBasis(rawData []*models.RawExchangeData) []*models.BasisResu
 		basisRaw := raw.Depth.MidPrice - raw.SpotMidPrice
 		basisPct := (basisRaw / raw.SpotMidPrice) * 100
 
-		// Use historical funding rate as the basis annualization proxy.
-		// avg funding rate * periods/year is a better estimate of expected carry cost
-		// than extrapolating the current snapshot.
 		summary := ComputeFundingSummary(raw)
 
 		annualizedAvg := summary.AvgRate30d * float64(constants.FundingPeriodsPerYear) * 100
 		annualizedLow := (summary.AvgRate30d - summary.StdDev30d) * float64(constants.FundingPeriodsPerYear) * 100
 		annualizedHigh := (summary.AvgRate30d + summary.StdDev30d) * float64(constants.FundingPeriodsPerYear) * 100
 
-		// Normalize so low <= high always (matters when avg is negative)
 		if annualizedLow > annualizedHigh {
 			annualizedLow, annualizedHigh = annualizedHigh, annualizedLow
 		}
@@ -246,7 +417,6 @@ func ComputeSpotPerpBasis(rawData []*models.RawExchangeData) []*models.BasisResu
 		})
 	}
 
-	// Sort by absolute basis descending — largest discrepancy first
 	for i := 0; i < len(results)-1; i++ {
 		for j := i + 1; j < len(results); j++ {
 			if math.Abs(results[j].BasisPct) > math.Abs(results[i].BasisPct) {
@@ -258,14 +428,7 @@ func ComputeSpotPerpBasis(rawData []*models.RawExchangeData) []*models.BasisResu
 	return results
 }
 
-// ComputeCrossBasisOpportunities finds all cross-exchange basis trade opportunities:
-// buy spot on one exchange, short perp on another, capturing the basis differential.
-// Results are sorted by net_basis_pct descending (most profitable first).
-// All exchange combinations are evaluated; non-viable pairs (net basis <= 0) are
-// still returned but flagged with Viable: false so the caller can filter if needed.
-//
-// feeOverrides: optional per-exchange fee overrides. Key = exchange name.
-// If nil or missing for an exchange, falls back to constants.DefaultTakerFees.
+// ComputeCrossBasisOpportunities finds all cross-exchange basis trade opportunities.
 func ComputeCrossBasisOpportunities(rawData []*models.RawExchangeData, feeOverrides map[string]models.ExchangeFees) []*models.CrossBasisOpportunity {
 	var results []*models.CrossBasisOpportunity
 
@@ -290,7 +453,6 @@ func ComputeCrossBasisOpportunities(rawData []*models.RawExchangeData, feeOverri
 
 			grossBasisPct := (perpEntryPrice - spotEntryPrice) / spotEntryPrice * 100
 
-			// Resolve fees — override takes priority, else use defaults
 			spotFees := constants.DefaultTakerFees[spotEx.Exchange]
 			if override, ok := feeOverrides[spotEx.Exchange]; ok {
 				spotFees = override
@@ -406,17 +568,13 @@ func fetchRawData(ctx context.Context, ex exchange.Exchange, pair string) (*mode
 	}, nil
 }
 
-// scoreFromRaw computes an ExchangeScore from raw data for a given side and position size.
-// Pure computation — no API calls.
-func scoreFromRaw(raw *models.RawExchangeData, positionSize float64, side string) *models.ExchangeScore {
+// scoreFromRaw computes an ExchangeScore from raw data. Pure computation — no API calls.
+func scoreFromRaw(raw *models.RawExchangeData, positionSize float64, side string, mode string) *models.ExchangeScore {
 	spreadPct := 0.0
 	if raw.Spread.Bid > 0 {
 		spreadPct = (raw.Spread.Spread / raw.Spread.Bid) * 100
 	}
 
-	// Pick order book side based on trade direction:
-	// Long = market buy = walk ask side (prices going up)
-	// Short = market sell = walk bid side (prices going down)
 	var levels []models.OrderBookLevel
 	if side == "short" {
 		levels = raw.Depth.Bids
@@ -429,6 +587,7 @@ func scoreFromRaw(raw *models.RawExchangeData, positionSize float64, side string
 		Exchange:     raw.Exchange,
 		Pair:         raw.Pair,
 		Side:         side,
+		Mode:         mode,
 		FundingRate:  raw.Funding.Rate,
 		SpreadPct:    spreadPct,
 		RawBidDepth:  raw.Depth.BidDepth,
@@ -441,8 +600,6 @@ func scoreFromRaw(raw *models.RawExchangeData, positionSize float64, side string
 	}
 }
 
-// estimateSlippage estimates slippage % for a market order of positionUSDT,
-// walking the provided order book levels (asks for long, bids for short).
 func estimateSlippage(levels []models.OrderBookLevel, midPrice float64, positionUSDT float64) float64 {
 	if len(levels) == 0 || midPrice == 0 {
 		return 0
@@ -537,6 +694,24 @@ func normalizeOI(scores []*models.ExchangeScore) {
 			s.OIScore = 0
 		} else {
 			s.OIScore = math.Sqrt(s.OpenInterest / max)
+		}
+	}
+}
+
+// normalizeBidDepth normalises raw bid depth so it can be used as a 0–1 score.
+// Used by exit_fast and large_position modes.
+func normalizeBidDepth(scores []*models.ExchangeScore) {
+	max := scores[0].RawBidDepth
+	for _, s := range scores[1:] {
+		if s.RawBidDepth > max {
+			max = s.RawBidDepth
+		}
+	}
+	for _, s := range scores {
+		if max == 0 {
+			s.BidDepthScore = 0
+		} else {
+			s.BidDepthScore = math.Sqrt(s.RawBidDepth / max)
 		}
 	}
 }
