@@ -6,15 +6,17 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/rs/zerolog/log"
 	"github.com/suwandre/arbiter/internal/constants"
-	"github.com/suwandre/arbiter/internal/scheduler"
+	"github.com/suwandre/arbiter/internal/scorer"
+	"github.com/suwandre/arbiter/internal/stream"
 )
 
 type ScoreHandler struct {
-	scheduler *scheduler.Scheduler
+	data   stream.DataSource
+	scorer *scorer.Scorer
 }
 
-func NewScoreHandler(scheduler *scheduler.Scheduler) *ScoreHandler {
-	return &ScoreHandler{scheduler}
+func NewScoreHandler(data stream.DataSource, sc *scorer.Scorer) *ScoreHandler {
+	return &ScoreHandler{data: data, scorer: sc}
 }
 
 // Handles GET /v1/scores/:pair?side=general|long|short&position=500000
@@ -33,7 +35,7 @@ func (h *ScoreHandler) GetScores(c fiber.Ctx) error {
 		})
 	}
 
-	positionSize := 0.0 // 0 = use scorer default
+	positionSize := 0.0
 	if raw := c.Query("position", ""); raw != "" {
 		parsed, err := strconv.ParseFloat(raw, 64)
 		if err != nil || parsed <= 0 {
@@ -50,11 +52,19 @@ func (h *ScoreHandler) GetScores(c fiber.Ctx) error {
 		Float64("position_size", positionSize).
 		Msg("fetching scores")
 
-	scores, ok := h.scheduler.GetScores(pair, side, positionSize)
-	if !ok {
+	rawData, ok := h.data.GetRawData(pair)
+	if !ok || len(rawData) == 0 {
 		log.Warn().Str("pair", pair).Str("side", side).Msg("pair not found in cache")
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 			"error": "pair not available, check configured pairs",
+		})
+	}
+
+	scores, err := h.scorer.ScoreAll(rawData, positionSize, side)
+	if err != nil {
+		log.Error().Err(err).Str("pair", pair).Str("side", side).Msg("scoring failed")
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "scoring failed",
 		})
 	}
 

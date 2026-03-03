@@ -13,8 +13,8 @@ import (
 	"github.com/suwandre/arbiter/api"
 	"github.com/suwandre/arbiter/config"
 	"github.com/suwandre/arbiter/internal/exchange"
-	"github.com/suwandre/arbiter/internal/scheduler"
 	"github.com/suwandre/arbiter/internal/scorer"
+	"github.com/suwandre/arbiter/internal/stream"
 )
 
 func main() {
@@ -31,29 +31,34 @@ func main() {
 	log.Info().Msg("config loaded")
 
 	// ── 4. Exchange adapters
-	// MEXC needs to load contract sizes separately, thus the extra initialization
 	mexc, err := exchange.NewMexcAdapter(cfg.MexcKey)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to initialize MEXC adapter")
 	}
 
-	exchanges := []exchange.Exchange{
+	exchanges := []exchange.StreamingExchange{
 		exchange.NewBinanceAdapter(cfg.BinanceKey),
 		exchange.NewBybitAdapter(cfg.BybitKey),
 		mexc,
 	}
 	log.Info().Int("count", len(exchanges)).Msg("exchange adapters initialized")
 
-	// ── 5. Scorer + Scheduler
-	sc := scorer.NewScorer(exchanges)
-	sched := scheduler.NewScheduler(sc, []string{
+	// Convert StreamingExchange slice to Exchange slice for scorer
+	baseExchanges := make([]exchange.Exchange, len(exchanges))
+	for i, ex := range exchanges {
+		baseExchanges[i] = ex
+	}
+
+	// ── 5. Scorer + Stream Manager
+	sc := scorer.NewScorer(baseExchanges)
+	manager := stream.NewManager(exchanges, []string{
 		"BTCUSDT",
 		"ETHUSDT",
 		"SOLUSDT",
-	}, 10*time.Second)
+	})
 
-	sched.Start(ctx)
-	defer sched.Stop()
+	manager.Start(ctx)
+	defer manager.Stop()
 
 	// ── 6. Fiber app
 	app := fiber.New(fiber.Config{
@@ -63,7 +68,7 @@ func main() {
 	})
 
 	// ── 7. Routes
-	api.SetupRoutes(app, sched)
+	api.SetupRoutes(app, manager, sc)
 
 	// ── 8. Graceful shutdown listener
 	go func() {

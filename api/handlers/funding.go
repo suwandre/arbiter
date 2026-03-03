@@ -8,8 +8,8 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/suwandre/arbiter/internal/constants"
 	"github.com/suwandre/arbiter/internal/models"
-	"github.com/suwandre/arbiter/internal/scheduler"
 	"github.com/suwandre/arbiter/internal/scorer"
+	"github.com/suwandre/arbiter/internal/stream"
 )
 
 type FundingResult struct {
@@ -27,11 +27,11 @@ type FundingResult struct {
 }
 
 type FundingHandler struct {
-	scheduler *scheduler.Scheduler
+	data stream.DataSource
 }
 
-func NewFundingHandler(scheduler *scheduler.Scheduler) *FundingHandler {
-	return &FundingHandler{scheduler}
+func NewFundingHandler(data stream.DataSource) *FundingHandler {
+	return &FundingHandler{data}
 }
 
 // Handles GET /v1/funding/:pair?side=long|short&hours=72
@@ -67,7 +67,7 @@ func (h *FundingHandler) GetFundingCost(c fiber.Ctx) error {
 		Float64("hours", hours).
 		Msg("fetching funding cost")
 
-	rawData, ok := h.scheduler.GetRawData(pair)
+	rawData, ok := h.data.GetRawData(pair)
 	if !ok || len(rawData) == 0 {
 		log.Warn().Str("pair", pair).Msg("pair not found in cache")
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
@@ -145,7 +145,7 @@ func (h *FundingHandler) GetFundingArb(c fiber.Ctx) error {
 
 	log.Info().Str("pair", pair).Msg("fetching funding arb opportunities")
 
-	rawData, ok := h.scheduler.GetRawData(pair)
+	rawData, ok := h.data.GetRawData(pair)
 	if !ok || len(rawData) == 0 {
 		log.Warn().Str("pair", pair).Msg("pair not found in cache")
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
@@ -176,7 +176,7 @@ func (h *FundingHandler) GetFundingDiff(c fiber.Ctx) error {
 
 	log.Info().Str("pair", pair).Msg("fetching funding rate diff")
 
-	rawData, ok := h.scheduler.GetRawData(pair)
+	rawData, ok := h.data.GetRawData(pair)
 	if !ok || len(rawData) == 0 {
 		log.Warn().Str("pair", pair).Msg("pair not found in cache")
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
@@ -236,7 +236,7 @@ func (h *FundingHandler) GetBasis(c fiber.Ctx) error {
 
 	log.Info().Str("pair", pair).Msg("fetching spot/perp basis")
 
-	rawData, ok := h.scheduler.GetRawData(pair)
+	rawData, ok := h.data.GetRawData(pair)
 	if !ok || len(rawData) == 0 {
 		log.Warn().Str("pair", pair).Msg("pair not found in cache")
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
@@ -296,7 +296,7 @@ func (h *FundingHandler) GetCrossBasis(c fiber.Ctx) error {
 
 	log.Info().Str("pair", pair).Msg("fetching cross-exchange basis opportunities")
 
-	rawData, ok := h.scheduler.GetRawData(pair)
+	rawData, ok := h.data.GetRawData(pair)
 	if !ok || len(rawData) == 0 {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
 			"error": "pair not available, check configured pairs",
