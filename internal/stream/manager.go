@@ -48,25 +48,33 @@ func NewManager(exchanges []exchange.StreamingExchange, pairs []string) *Manager
 	}
 }
 
-// Start launches all WS streams and REST pollers. Blocks until Stop is called.
+// Start launches all WS streams and REST pollers.
 func (m *Manager) Start(parentCtx context.Context) {
 	ctx, cancel := context.WithCancel(parentCtx)
 	m.cancel = cancel
 
+	// Seed all exchange+pair REST data concurrently so slow exchanges
+	// (e.g. MEXC) don't block faster ones during startup.
+	var seedWg sync.WaitGroup
 	for _, ex := range m.exchanges {
 		for _, pair := range m.pairs {
-			// Seed REST data immediately before streams start
-			m.fetchREST(ctx, ex, pair)
+			seedWg.Add(1)
+			go func(ex exchange.StreamingExchange, pair string) {
+				defer seedWg.Done()
+				m.fetchREST(ctx, ex, pair)
+			}(ex, pair)
+		}
+	}
+	seedWg.Wait()
 
-			// Order book stream
+	for _, ex := range m.exchanges {
+		for _, pair := range m.pairs {
 			m.wg.Add(1)
 			go m.runOrderBookStream(ctx, ex, pair)
 
-			// Ticker stream
 			m.wg.Add(1)
 			go m.runTickerStream(ctx, ex, pair)
 
-			// Slow REST poller for funding, stats, spot price
 			m.wg.Add(1)
 			go m.runRESTPoller(ctx, ex, pair)
 		}
@@ -253,22 +261,26 @@ func (m *Manager) runRESTPoller(ctx context.Context, ex exchange.StreamingExchan
 // fetchREST fetches funding rate + history, market stats, and spot price via REST.
 // Called once at startup and then every restPollInterval.
 func (m *Manager) fetchREST(ctx context.Context, ex exchange.StreamingExchange, pair string) {
-	funding, err := ex.GetFundingRate(ctx, pair)
+	// Bound each REST poll cycle so slow exchanges don't block the goroutine.
+	fetchCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	funding, err := ex.GetFundingRate(fetchCtx, pair)
 	if err != nil {
 		log.Error().Err(err).Str("exchange", ex.Name()).Str("pair", pair).Msg("REST: funding rate failed")
 	}
 
-	history, err := ex.GetFundingRateHistory(ctx, pair, 90)
+	history, err := ex.GetFundingRateHistory(fetchCtx, pair, 90)
 	if err != nil {
 		log.Error().Err(err).Str("exchange", ex.Name()).Str("pair", pair).Msg("REST: funding history failed")
 	}
 
-	stats, err := ex.GetMarketStats(ctx, pair)
+	stats, err := ex.GetMarketStats(fetchCtx, pair)
 	if err != nil {
 		log.Error().Err(err).Str("exchange", ex.Name()).Str("pair", pair).Msg("REST: market stats failed")
 	}
 
-	spot, err := ex.GetSpotPrice(ctx, pair)
+	spot, err := ex.GetSpotPrice(fetchCtx, pair)
 	if err != nil {
 		log.Error().Err(err).Str("exchange", ex.Name()).Str("pair", pair).Msg("REST: spot price failed")
 	}
@@ -289,5 +301,4 @@ func (m *Manager) fetchREST(ctx context.Context, ex exchange.StreamingExchange, 
 	}
 	s.FetchedAt = time.Now()
 	m.mu.Unlock()
-
 }

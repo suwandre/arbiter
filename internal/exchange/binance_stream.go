@@ -56,6 +56,11 @@ func (b *BinanceAdapter) StreamOrderBook(ctx context.Context, pair string, out c
 			continue
 		}
 
+		// Skip non-depth messages (subscription acks, heartbeats)
+		if event.EventType != "depthUpdate" {
+			continue
+		}
+
 		// Apply diffs — quantity of 0 means remove the level
 		applyDiffs(bids, event.Bids)
 		applyDiffs(asks, event.Asks)
