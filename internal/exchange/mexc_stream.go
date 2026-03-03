@@ -113,7 +113,7 @@ func (m *MexcAdapter) StreamTicker(ctx context.Context, pair string, out chan<- 
 
 	sub, _ := json.Marshal(map[string]any{
 		"method": "sub.ticker",
-		"param":  map[string]string{"symbol": pair},
+		"param":  map[string]string{"symbol": toMexcSymbol(pair)},
 	})
 	if err := conn.WriteMessage(websocket.TextMessage, sub); err != nil {
 		return fmt.Errorf("mexc StreamTicker: subscribe failed: %w", err)
