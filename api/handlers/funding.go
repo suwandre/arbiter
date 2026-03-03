@@ -248,7 +248,7 @@ func (h *FundingHandler) GetBasis(c fiber.Ctx) error {
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"pair":    pair,
-		"note":    "basis_pct = (perp_mid - spot_mid) / spot_mid * 100. positive = perp premium (contango), negative = perp discount (backwardation). annualized_pct is a proxy and assumes basis is constant.",
+		"note":    "basis_pct = (perp_mid - spot_mid) / spot_mid * 100. positive = perp premium (contango), negative = perp discount (backwardation). annualized estimates use 30d avg funding rate ± 1 stddev, not the current snapshot.",
 		"count":   len(results),
 		"results": results,
 	})
