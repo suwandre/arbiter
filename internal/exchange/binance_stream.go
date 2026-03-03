@@ -60,6 +60,8 @@ func (b *BinanceAdapter) StreamOrderBook(ctx context.Context, pair string, out c
 		applyDiffs(bids, event.Bids)
 		applyDiffs(asks, event.Asks)
 
+		trimBook(bids, 1000, true)
+		trimBook(asks, 1000, false)
 		depth := buildDepth("binance", pair, bids, asks)
 		select {
 		case out <- depth:

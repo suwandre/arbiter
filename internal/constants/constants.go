@@ -15,8 +15,9 @@ const (
 	// DefaultPositionUSDT is the fallback position size used when none is provided.
 	DefaultPositionUSDT = 500_000.0
 
-	// OrderBookTargetLevels is the number of order book levels to request per side.
-	OrderBookTargetLevels = 20
+	// OrderBookTargetLevels is the number of order book levels maintained per side
+	// for both REST snapshots and WebSocket streams.
+	OrderBookTargetLevels = 1000
 )
 
 // TakerFee holds the default taker fee percentages per exchange (as a percent, e.g. 0.05 = 0.05%).

@@ -113,3 +113,24 @@ func sumLevels(levels []models.OrderBookLevel) float64 {
 	}
 	return total
 }
+
+// trimBook keeps only the top maxLevels from a book map.
+// For bids: keeps highest prices. For asks: keeps lowest prices.
+func trimBook(book map[float64]float64, maxLevels int, bids bool) {
+	if len(book) <= maxLevels {
+		return
+	}
+	levels := make([]float64, 0, len(book))
+	for price := range book {
+		levels = append(levels, price)
+	}
+	sort.Slice(levels, func(i, j int) bool {
+		if bids {
+			return levels[i] > levels[j] // descending for bids — keep highest
+		}
+		return levels[i] < levels[j] // ascending for asks — keep lowest
+	})
+	for _, price := range levels[maxLevels:] {
+		delete(book, price)
+	}
+}
