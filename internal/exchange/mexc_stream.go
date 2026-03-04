@@ -100,7 +100,8 @@ func (m *MexcAdapter) StreamOrderBook(ctx context.Context, pair string, out chan
 		depth := buildDepth("mexc", pair, bids, asks)
 		select {
 		case out <- depth:
-		default:
+		case <-ctx.Done():
+			return nil
 		}
 	}
 }
@@ -162,7 +163,8 @@ func (m *MexcAdapter) StreamTicker(ctx context.Context, pair string, out chan<- 
 			Ask:      event.Data.Ask1,
 			Spread:   event.Data.Ask1 - event.Data.Bid1,
 		}:
-		default:
+		case <-ctx.Done():
+			return nil
 		}
 	}
 }

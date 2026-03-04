@@ -208,6 +208,7 @@ func (m *Manager) runTickerStream(ctx context.Context, ex exchange.StreamingExch
 
 	consume:
 		for {
+			log.Debug().Str("exchange", ex.Name()).Str("pair", pair).Msg("consume loop tick")
 			select {
 			case <-ctx.Done():
 				streamCancel()
@@ -221,6 +222,12 @@ func (m *Manager) runTickerStream(ctx context.Context, ex exchange.StreamingExch
 				m.mu.Lock()
 				m.state[pair][ex.Name()].Spread = spread
 				m.mu.Unlock()
+				log.Debug().
+					Str("exchange", ex.Name()).
+					Str("pair", pair).
+					Float64("bid", spread.Bid).
+					Float64("ask", spread.Ask).
+					Msg("ticker state updated")
 				wait = reconnectBaseWait
 			}
 		}

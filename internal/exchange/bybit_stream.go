@@ -75,7 +75,8 @@ func (b *BybitAdapter) StreamOrderBook(ctx context.Context, pair string, out cha
 		depth := buildDepth("bybit", pair, bids, asks)
 		select {
 		case out <- depth:
-		default:
+		case <-ctx.Done():
+			return nil
 		}
 	}
 }
@@ -139,7 +140,8 @@ func (b *BybitAdapter) StreamTicker(ctx context.Context, pair string, out chan<-
 			Ask:      ask,
 			Spread:   ask - bid,
 		}:
-		default:
+		case <-ctx.Done():
+			return nil
 		}
 	}
 }

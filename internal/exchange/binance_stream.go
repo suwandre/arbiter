@@ -40,9 +40,9 @@ func (b *BinanceAdapter) StreamOrderBook(ctx context.Context, pair string, out c
 	}
 
 	type depthEvent struct {
-		EventType json.RawMessage `json:"e"`
-		Bids      [][]string      `json:"b"`
-		Asks      [][]string      `json:"a"`
+		LastUpdateID int64      `json:"lastUpdateId"`
+		Bids         [][]string `json:"b"`
+		Asks         [][]string `json:"a"`
 	}
 
 	for {
@@ -63,10 +63,7 @@ func (b *BinanceAdapter) StreamOrderBook(ctx context.Context, pair string, out c
 			continue
 		}
 
-		// Skip non-depth messages — EventType may be a number in ack/heartbeat messages
-		if string(event.EventType) != `"depthUpdate"` {
-			continue
-		}
+		log.Debug().Str("exchange", "binance").Str("pair", pair).Int("bids", len(event.Bids)).Int("asks", len(event.Asks)).Msg("depth event received")
 
 		// Apply diffs — quantity of 0 means remove the level
 		applyDiffs(bids, event.Bids)
@@ -75,10 +72,13 @@ func (b *BinanceAdapter) StreamOrderBook(ctx context.Context, pair string, out c
 		trimBook(bids, 1000, true)
 		trimBook(asks, 1000, false)
 		depth := buildDepth("binance", pair, bids, asks)
+
+		log.Debug().Str("exchange", "binance").Str("pair", pair).Float64("bidDepth", depth.BidDepth).Float64("askDepth", depth.AskDepth).Msg("depth built")
+
 		select {
 		case out <- depth:
-		default:
-			// Drop if consumer is slow — always prefer fresh data
+		case <-ctx.Done():
+			return nil
 		}
 	}
 }
@@ -95,9 +95,11 @@ func (b *BinanceAdapter) StreamTicker(ctx context.Context, pair string, out chan
 	log.Info().Str("exchange", "binance").Str("pair", pair).Msg("ticker stream connected")
 
 	type tickerEvent struct {
-		EventType json.RawMessage `json:"e"`
-		BidPrice  string          `json:"b"`
-		AskPrice  string          `json:"a"`
+		Symbol   string `json:"s"`
+		BidPrice string `json:"b"` // Binance: b = best bid price
+		BidQty   string `json:"B"` // Binance: B = best bid quantity
+		AskPrice string `json:"a"` // Binance: a = best ask price
+		AskQty   string `json:"A"` // Binance: A = best ask quantity
 	}
 
 	for {
@@ -114,18 +116,17 @@ func (b *BinanceAdapter) StreamTicker(ctx context.Context, pair string, out chan
 
 		var event tickerEvent
 		if err := json.Unmarshal(msg, &event); err != nil {
+			log.Debug().Str("exchange", "binance").Str("pair", pair).Msg("failed to parse ticker event, skipping")
 			continue
 		}
 
-		// Only process genuine bookTicker events
-		if string(event.EventType) != `"bookTicker"` {
-			continue
-		}
-
+		// Binance bookTicker WebSocket doesn't have an 'e' (eventType) field,
+		// so we process all messages that have valid bid/ask prices
 		bid, _ := strconv.ParseFloat(event.BidPrice, 64)
 		ask, _ := strconv.ParseFloat(event.AskPrice, 64)
 
 		if bid <= 0 || ask <= 0 || ask < bid {
+			log.Debug().Str("exchange", "binance").Str("pair", pair).Float64("bid", bid).Float64("ask", ask).Msg("invalid bid/ask values, skipping")
 			continue
 		}
 
@@ -137,7 +138,8 @@ func (b *BinanceAdapter) StreamTicker(ctx context.Context, pair string, out chan
 			Ask:      ask,
 			Spread:   ask - bid,
 		}:
-		default:
+		case <-ctx.Done():
+			return nil
 		}
 	}
 }
