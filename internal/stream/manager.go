@@ -23,10 +23,27 @@ const (
 type Manager struct {
 	exchanges []exchange.StreamingExchange
 	pairs     []string
-	state     map[string]map[string]*models.RawExchangeData // pair -> exchange name -> data
+	state     map[string]map[string]*models.RawExchangeData
 	mu        sync.RWMutex
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
+
+	startedAt time.Time       // set once in Start()
+	wsStatus  map[string]bool // exchange name -> WS connected
+	wsMu      sync.RWMutex
+}
+
+// PairStatus holds cache freshness info for a single pair+exchange.
+type PairStatus struct {
+	Exchange  string    `json:"exchange"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Stale     bool      `json:"stale"` // true if not updated in the last 60s
+}
+
+// ExchangeStatus holds WS connection state for a single exchange.
+type ExchangeStatus struct {
+	Exchange    string `json:"exchange"`
+	WSConnected bool   `json:"ws_connected"`
 }
 
 func NewManager(exchanges []exchange.StreamingExchange, pairs []string) *Manager {
@@ -45,6 +62,7 @@ func NewManager(exchanges []exchange.StreamingExchange, pairs []string) *Manager
 		exchanges: exchanges,
 		pairs:     pairs,
 		state:     state,
+		wsStatus:  make(map[string]bool),
 	}
 }
 
@@ -52,6 +70,14 @@ func NewManager(exchanges []exchange.StreamingExchange, pairs []string) *Manager
 func (m *Manager) Start(parentCtx context.Context) {
 	ctx, cancel := context.WithCancel(parentCtx)
 	m.cancel = cancel
+	m.startedAt = time.Now()
+
+	// initialize all WS statuses to false before streams come up
+	m.wsMu.Lock()
+	for _, ex := range m.exchanges {
+		m.wsStatus[ex.Name()] = false
+	}
+	m.wsMu.Unlock()
 
 	// Seed all exchange+pair REST data concurrently so slow exchanges
 	// (e.g. MEXC) don't block faster ones during startup.
@@ -116,6 +142,42 @@ func (m *Manager) GetRawData(pair string) ([]*models.RawExchangeData, bool) {
 	return result, true
 }
 
+// Pairs returns all configured pairs and their per-exchange cache freshness.
+func (m *Manager) Pairs() map[string][]PairStatus {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	out := make(map[string][]PairStatus, len(m.pairs))
+	for _, pair := range m.pairs {
+		statuses := make([]PairStatus, 0)
+		for exName, data := range m.state[pair] {
+			stale := time.Since(data.FetchedAt) > 60*time.Second
+			statuses = append(statuses, PairStatus{
+				Exchange:  exName,
+				UpdatedAt: data.FetchedAt,
+				Stale:     stale,
+			})
+		}
+		out[pair] = statuses
+	}
+	return out
+}
+
+// Status returns WS connection state per exchange and server uptime.
+func (m *Manager) Status() ([]ExchangeStatus, time.Duration) {
+	m.wsMu.RLock()
+	defer m.wsMu.RUnlock()
+
+	statuses := make([]ExchangeStatus, 0, len(m.exchanges))
+	for _, ex := range m.exchanges {
+		statuses = append(statuses, ExchangeStatus{
+			Exchange:    ex.Name(),
+			WSConnected: m.wsStatus[ex.Name()],
+		})
+	}
+	return statuses, time.Since(m.startedAt)
+}
+
 // runOrderBookStream runs StreamOrderBook with exponential backoff reconnect.
 func (m *Manager) runOrderBookStream(ctx context.Context, ex exchange.StreamingExchange, pair string) {
 	defer m.wg.Done()
@@ -160,7 +222,15 @@ func (m *Manager) runOrderBookStream(ctx context.Context, ex exchange.StreamingE
 				m.state[pair][ex.Name()].Depth = depth
 				m.state[pair][ex.Name()].FetchedAt = time.Now()
 				m.mu.Unlock()
-				wait = reconnectBaseWait // reset backoff on successful message
+
+				m.wsMu.Lock()
+				m.wsStatus[ex.Name()] = true
+				m.wsMu.Unlock()
+				wait = reconnectBaseWait
+
+				m.wsMu.Lock()
+				m.wsStatus[ex.Name()] = false
+				m.wsMu.Unlock()
 			}
 		}
 
