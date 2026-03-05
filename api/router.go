@@ -10,6 +10,7 @@ import (
 func SetupRoutes(app *fiber.App, data stream.DataSource, sc *scorer.Scorer) {
 	scoreHandler := handlers.NewScoreHandler(data, sc)
 	fundingHandler := handlers.NewFundingHandler(data)
+	anomalyHandler := handlers.NewAnomalyHandler(data)
 
 	v1 := app.Group("/v1")
 
@@ -19,4 +20,5 @@ func SetupRoutes(app *fiber.App, data stream.DataSource, sc *scorer.Scorer) {
 	v1.Get("/funding/:pair/diff", fundingHandler.GetFundingDiff)
 	v1.Get("/funding/:pair/basis", fundingHandler.GetBasis)
 	v1.Get("/funding/:pair/cross-basis", fundingHandler.GetCrossBasis)
+	v1.Get("/anomaly/:pair", anomalyHandler.GetAnomaly)
 }

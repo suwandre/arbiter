@@ -145,3 +145,21 @@ type ExchangeFees struct {
 	SpotTakerPct float64 `json:"spot_taker_pct"`
 	PerpTakerPct float64 `json:"perp_taker_pct"`
 }
+
+// AnomalySignal represents a single detected anomaly flag for an exchange.
+type AnomalySignal struct {
+	Type        string  `json:"type"`        // e.g. "depth_volume_divergence", "book_imbalance", etc.
+	Description string  `json:"description"` // raw description, frontend formats this
+	Severity    string  `json:"severity"`    // "low", "medium", "high"
+	Value       float64 `json:"value"`       // the raw metric that triggered this signal
+	Threshold   float64 `json:"threshold"`   // what value it was compared against
+}
+
+// AnomalyResult holds all anomaly signals detected for a single exchange+pair.
+type AnomalyResult struct {
+	Exchange  string          `json:"exchange"`
+	Pair      string          `json:"pair"`
+	Signals   []AnomalySignal `json:"signals"` // empty slice = no anomalies detected
+	Clean     bool            `json:"clean"`   // true if no signals fired
+	UpdatedAt time.Time       `json:"updated_at"`
+}

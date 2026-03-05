@@ -501,6 +501,156 @@ func ComputeCrossBasisOpportunities(rawData []*models.RawExchangeData, feeOverri
 	return results
 }
 
+// ComputeAnomaly detects anomalous market behaviour for each exchange.
+// All signals are derived purely from data already in the stream cache.
+//
+// Signals detected:
+//   - depth_volume_divergence: high book depth relative to volume — suggests fake walls (MEXC pattern)
+//   - book_imbalance:          bid depth >> ask depth or vice versa — directional pressure or spoofing
+//   - spread_spike:            spread is unusually wide relative to peers
+//   - oi_volume_divergence:    OI is growing while volume is low — positioning without real activity
+func ComputeAnomaly(rawData []*models.RawExchangeData) []*models.AnomalyResult {
+	if len(rawData) == 0 {
+		return nil
+	}
+
+	// Compute peer averages for relative comparisons
+	var totalVolume, totalDepth, totalOI, totalSpread float64
+	for _, raw := range rawData {
+		totalVolume += raw.Stats.Volume24h
+		totalOI += raw.Stats.OpenInterest
+		totalSpread += raw.Spread.Spread
+		if raw.Depth != nil {
+			totalDepth += raw.Depth.BidDepth + raw.Depth.AskDepth
+		}
+	}
+	n := float64(len(rawData))
+	avgVolume := totalVolume / n
+	avgDepth := totalDepth / n
+	avgSpread := totalSpread / n
+	avgOI := totalOI / n
+
+	results := make([]*models.AnomalyResult, 0, len(rawData))
+
+	for _, raw := range rawData {
+		var signals []models.AnomalySignal
+
+		totalBookDepth := 0.0
+		bidDepth := 0.0
+		askDepth := 0.0
+		if raw.Depth != nil {
+			bidDepth = raw.Depth.BidDepth
+			askDepth = raw.Depth.AskDepth
+			totalBookDepth = bidDepth + askDepth
+		}
+
+		// --- Signal 1: depth/volume divergence ---
+		// High book depth relative to volume suggests walls that don't absorb real flow.
+		// Threshold: depth is 3x the peer average depth-to-volume ratio.
+		if avgVolume > 0 && raw.Stats.Volume24h > 0 {
+			peerRatio := avgDepth / avgVolume
+			thisRatio := totalBookDepth / raw.Stats.Volume24h
+			const depthVolumeThreshold = 3.0
+			if peerRatio > 0 && thisRatio/peerRatio >= depthVolumeThreshold {
+				severity := "medium"
+				if thisRatio/peerRatio >= 6.0 {
+					severity = "high"
+				}
+				signals = append(signals, models.AnomalySignal{
+					Type:        "depth_volume_divergence",
+					Description: "book depth is disproportionately high relative to volume compared to peers",
+					Severity:    severity,
+					Value:       thisRatio / peerRatio,
+					Threshold:   depthVolumeThreshold,
+				})
+			}
+		}
+
+		// --- Signal 2: book imbalance ---
+		// Heavily skewed bid/ask depth suggests directional pressure or spoofed walls.
+		// Threshold: one side is more than 4x the other.
+		if bidDepth > 0 && askDepth > 0 {
+			ratio := bidDepth / askDepth
+			if ratio < 1 {
+				ratio = 1 / ratio // normalize to always be >= 1
+			}
+			const imbalanceThreshold = 4.0
+			if ratio >= imbalanceThreshold {
+				severity := "medium"
+				if ratio >= 8.0 {
+					severity = "high"
+				}
+				side := "bid-heavy"
+				if askDepth > bidDepth {
+					side = "ask-heavy"
+				}
+				signals = append(signals, models.AnomalySignal{
+					Type:        "book_imbalance",
+					Description: side + ": one side of the order book is disproportionately deep",
+					Severity:    severity,
+					Value:       ratio,
+					Threshold:   imbalanceThreshold,
+				})
+			}
+		}
+
+		// --- Signal 3: spread spike ---
+		// Spread much wider than the peer average indicates illiquidity or instability.
+		// Threshold: spread is 3x the peer average.
+		if avgSpread > 0 {
+			const spreadThreshold = 3.0
+			ratio := raw.Spread.Spread / avgSpread
+			if ratio >= spreadThreshold {
+				severity := "medium"
+				if ratio >= 6.0 {
+					severity = "high"
+				}
+				signals = append(signals, models.AnomalySignal{
+					Type:        "spread_spike",
+					Description: "spread is significantly wider than peer average",
+					Severity:    severity,
+					Value:       ratio,
+					Threshold:   spreadThreshold,
+				})
+			}
+		}
+
+		// --- Signal 4: OI/volume divergence ---
+		// OI significantly above peer average while volume is significantly below
+		// suggests open positions building without real market activity.
+		if avgOI > 0 && avgVolume > 0 {
+			oiRatio := raw.Stats.OpenInterest / avgOI
+			volRatio := raw.Stats.Volume24h / avgVolume
+			const oiDivThreshold = 2.0
+			if oiRatio >= oiDivThreshold && volRatio < 0.5 {
+				signals = append(signals, models.AnomalySignal{
+					Type:        "oi_volume_divergence",
+					Description: "open interest is high relative to peers while volume is low — unusual positioning",
+					Severity:    "medium",
+					Value:       oiRatio / volRatio,
+					Threshold:   oiDivThreshold,
+				})
+			}
+		}
+
+		results = append(results, &models.AnomalyResult{
+			Exchange: raw.Exchange,
+			Pair:     raw.Pair,
+			Signals: func() []models.AnomalySignal {
+				if signals == nil {
+					// return [] instead of nil
+					return []models.AnomalySignal{}
+				}
+				return signals
+			}(),
+			Clean:     len(signals) == 0,
+			UpdatedAt: raw.FetchedAt,
+		})
+	}
+
+	return results
+}
+
 // fetchRawData fetches all market data for one exchange+pair concurrently.
 func fetchRawData(ctx context.Context, ex exchange.Exchange, pair string) (*models.RawExchangeData, error) {
 	var (
