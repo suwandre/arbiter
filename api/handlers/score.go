@@ -20,7 +20,7 @@ func NewScoreHandler(data stream.DataSource, sc *scorer.Scorer) *ScoreHandler {
 	return &ScoreHandler{data: data, scorer: sc}
 }
 
-// GET /v1/scores/:pair?side=general|long|short&position=500000&mode=entry_long
+// GET /v1/scores/:pair?side=general|long|short&position=500000&mode=entry_long&hours=24
 func (h *ScoreHandler) GetScores(c fiber.Ctx) error {
 	pair := c.Params("pair")
 	if pair == "" {
@@ -54,6 +54,17 @@ func (h *ScoreHandler) GetScores(c fiber.Ctx) error {
 		positionSize = parsed
 	}
 
+	hours := 0.0
+	if raw := c.Query("hours", ""); raw != "" {
+		parsed, err := strconv.ParseFloat(raw, 64)
+		if err != nil || parsed <= 0 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"error": "hours must be a positive number",
+			})
+		}
+		hours = parsed
+	}
+
 	log.Info().
 		Str("pair", pair).
 		Str("side", side).
@@ -69,7 +80,7 @@ func (h *ScoreHandler) GetScores(c fiber.Ctx) error {
 		})
 	}
 
-	scores, err := h.scorer.ScoreAll(rawData, positionSize, side, mode)
+	scores, err := h.scorer.ScoreAll(rawData, positionSize, side, mode, hours)
 	if err != nil {
 		log.Error().Err(err).Str("pair", pair).Str("mode", string(mode)).Msg("scoring failed")
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{

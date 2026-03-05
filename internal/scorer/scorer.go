@@ -238,7 +238,7 @@ func (s *Scorer) FetchAll(ctx context.Context, pair string) ([]*models.RawExchan
 //	when the mode does not imply a fixed side.
 //
 // positionSize: position size in USDT. Uses DefaultPositionUSDT if <= 0.
-func (s *Scorer) ScoreAll(rawData []*models.RawExchangeData, positionSize float64, side string, mode ScoringMode) ([]*models.ExchangeScore, error) {
+func (s *Scorer) ScoreAll(rawData []*models.RawExchangeData, positionSize float64, side string, mode ScoringMode, hours float64) ([]*models.ExchangeScore, error) {
 	if positionSize <= 0 {
 		positionSize = constants.DefaultPositionUSDT
 	}
@@ -253,9 +253,17 @@ func (s *Scorer) ScoreAll(rawData []*models.RawExchangeData, positionSize float6
 		return nil, fmt.Errorf("no raw data provided to ScoreAll")
 	}
 
-	weights, ok := weightProfiles[mode]
-	if !ok {
-		weights = weightProfiles[ModeGeneral]
+	var weights ScoreWeights
+	if hours > 0 {
+		// Duration + size supplied — derive weights dynamically
+		weights = DeriveWeights(side, hours, positionSize)
+	} else {
+		// Explicit mode supplied — use static profile
+		var ok bool
+		weights, ok = weightProfiles[mode]
+		if !ok {
+			weights = weightProfiles[ModeGeneral]
+		}
 	}
 
 	// Resolve the effective order book side to walk.
@@ -649,6 +657,95 @@ func ComputeAnomaly(rawData []*models.RawExchangeData) []*models.AnomalyResult {
 	}
 
 	return results
+}
+
+// DeriveWeights returns a ScoreWeights profile interpolated from hold duration
+// and position size. If hours <= 0 it falls back to the static weightProfiles.
+//
+// Duration logic (per side):
+//
+//	0–8h   (intraday):  entry profile — spread + slippage dominate, funding near zero
+//	8–48h  (short swing): funding weight grows linearly from 0.05 → 0.40
+//	48–240h (medium swing): funding grows linearly from 0.40 → 0.80
+//	>240h  (long carry): funding capped at 0.80 (same as overnight profile)
+//
+// Size logic:
+//
+//	< $2k:  spread bonus  (+0.10 to spread, taken from slippage)
+//	> $50k: depth + slippage bonus (+0.10 each, taken from spread + volume)
+func DeriveWeights(side string, hours float64, positionUSDT float64) ScoreWeights {
+	// --- Base weights (entry profile) ---
+	w := ScoreWeights{
+		Volume:   0.25,
+		Spread:   0.30,
+		OI:       0.20,
+		Slippage: 0.20,
+		Funding:  0.05,
+		BidDepth: 0.00,
+	}
+
+	// --- Duration: interpolate funding weight ---
+	var targetFunding float64
+	switch {
+	case hours <= 8:
+		targetFunding = 0.05
+	case hours <= 48:
+		// linear: 0.05 → 0.40 over 8h–48h
+		targetFunding = 0.05 + (hours-8)/(48-8)*(0.40-0.05)
+	case hours <= 240:
+		// linear: 0.40 → 0.80 over 48h–240h
+		targetFunding = 0.40 + (hours-48)/(240-48)*(0.80-0.40)
+	default:
+		targetFunding = 0.80
+	}
+
+	// Distribute the funding increase by scaling down spread + slippage proportionally
+	fundingIncrease := targetFunding - w.Funding
+	w.Funding = targetFunding
+	// Take equally from spread and slippage (they're the two largest non-funding weights)
+	w.Spread -= fundingIncrease * 0.5
+	w.Slippage -= fundingIncrease * 0.5
+	// Floor at 0.02 — never fully eliminate spread or slippage signal
+	if w.Spread < 0.02 {
+		w.Spread = 0.02
+	}
+	if w.Slippage < 0.02 {
+		w.Slippage = 0.02
+	}
+
+	// --- Size: large position bonus ---
+	if positionUSDT >= 50000 {
+		// Large orders: depth + slippage matter more
+		bonus := 0.10
+		w.BidDepth += bonus
+		w.Slippage += bonus
+		w.Volume -= bonus
+		w.Spread -= bonus
+		if w.Volume < 0.05 {
+			w.Volume = 0.05
+		}
+		if w.Spread < 0.02 {
+			w.Spread = 0.02
+		}
+	} else if positionUSDT < 2000 {
+		// Small orders: spread dominates
+		w.Spread += 0.10
+		w.Slippage -= 0.10
+		if w.Slippage < 0.02 {
+			w.Slippage = 0.02
+		}
+	}
+
+	// Renormalize to ensure sum == 1.0
+	total := w.Volume + w.Spread + w.OI + w.Slippage + w.Funding + w.BidDepth
+	w.Volume /= total
+	w.Spread /= total
+	w.OI /= total
+	w.Slippage /= total
+	w.Funding /= total
+	w.BidDepth /= total
+
+	return w
 }
 
 // fetchRawData fetches all market data for one exchange+pair concurrently.

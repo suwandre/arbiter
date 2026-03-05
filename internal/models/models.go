@@ -163,3 +163,34 @@ type AnomalyResult struct {
 	Clean     bool            `json:"clean"`   // true if no signals fired
 	UpdatedAt time.Time       `json:"updated_at"`
 }
+
+type FundingResult struct {
+	Exchange             string  `json:"exchange"`
+	CurrentRate          float64 `json:"current_rate"`
+	AvgRate30d           float64 `json:"avg_rate_30d"`
+	StdDev30d            float64 `json:"std_dev_30d"`
+	MinRate30d           float64 `json:"min_rate_30d"`
+	MaxRate30d           float64 `json:"max_rate_30d"`
+	HistoricalPeriods    int     `json:"historical_periods"`
+	ProjectedCostPct     float64 `json:"projected_cost_pct"`      // based on 30d avg
+	ProjectedCostLowPct  float64 `json:"projected_cost_low_pct"`  // optimistic: avg - 1 std dev
+	ProjectedCostHighPct float64 `json:"projected_cost_high_pct"` // pessimistic: avg + 1 std dev
+	Paying               bool    `json:"paying"`                  // true if net cost (not receiving)
+}
+
+// RecommendRequest holds the parsed inputs for the /v1/recommend endpoint.
+type RecommendRequest struct {
+	Pair         string  `json:"pair"`
+	Side         string  `json:"side"`          // "long" or "short"
+	PositionUSDT float64 `json:"position_usdt"` // position size in USDT
+	HoldHours    float64 `json:"hold_hours"`    // intended hold duration
+}
+
+// RecommendResult is the unified response for /v1/recommend.
+type RecommendResult struct {
+	Request      RecommendRequest   `json:"request"`
+	WeightsUsed  map[string]float64 `json:"weights_used"`  // what the engine derived
+	Rankings     []*ExchangeScore   `json:"rankings"`      // ranked exchanges
+	FundingCosts []FundingResult    `json:"funding_costs"` // projected cost over hold period
+	Anomalies    []*AnomalyResult   `json:"anomalies"`     // per-exchange anomaly flags
+}

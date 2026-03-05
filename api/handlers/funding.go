@@ -12,20 +12,6 @@ import (
 	"github.com/suwandre/arbiter/internal/stream"
 )
 
-type FundingResult struct {
-	Exchange             string  `json:"exchange"`
-	CurrentRate          float64 `json:"current_rate"`
-	AvgRate30d           float64 `json:"avg_rate_30d"`
-	StdDev30d            float64 `json:"std_dev_30d"`
-	MinRate30d           float64 `json:"min_rate_30d"`
-	MaxRate30d           float64 `json:"max_rate_30d"`
-	HistoricalPeriods    int     `json:"historical_periods"`
-	ProjectedCostPct     float64 `json:"projected_cost_pct"`      // based on 30d avg
-	ProjectedCostLowPct  float64 `json:"projected_cost_low_pct"`  // optimistic: avg - 1 std dev
-	ProjectedCostHighPct float64 `json:"projected_cost_high_pct"` // pessimistic: avg + 1 std dev
-	Paying               bool    `json:"paying"`                  // true if net cost (not receiving)
-}
-
 type FundingHandler struct {
 	data stream.DataSource
 }
@@ -78,7 +64,7 @@ func (h *FundingHandler) GetFundingCost(c fiber.Ctx) error {
 	// Round up — partial periods still incur a full funding payment
 	fundingPeriods := math.Ceil(hours / constants.FundingIntervalHours)
 
-	results := make([]FundingResult, 0, len(rawData))
+	results := make([]models.FundingResult, 0, len(rawData))
 	for _, raw := range rawData {
 		summary := scorer.ComputeFundingSummary(raw)
 
@@ -98,7 +84,7 @@ func (h *FundingHandler) GetFundingCost(c fiber.Ctx) error {
 			projectedLow, projectedHigh = projectedHigh, projectedLow
 		}
 
-		results = append(results, FundingResult{
+		results = append(results, models.FundingResult{
 			Exchange:             raw.Exchange,
 			CurrentRate:          summary.CurrentRate,
 			AvgRate30d:           summary.AvgRate30d,
