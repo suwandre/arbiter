@@ -95,6 +95,7 @@ func (h *FundingHandler) GetFundingCost(c fiber.Ctx) error {
 			ProjectedCostPct:     projectedCost,
 			ProjectedCostLowPct:  projectedLow,
 			ProjectedCostHighPct: projectedHigh,
+			NetPnlPct:            -projectedCost,
 			Paying:               projectedCost > 0,
 		})
 	}

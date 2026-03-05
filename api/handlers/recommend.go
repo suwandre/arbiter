@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"math"
 	"strconv"
 
@@ -95,6 +96,7 @@ func (h *RecommendHandler) GetRecommendation(c fiber.Ctx) error {
 			ProjectedCostPct:     projected,
 			ProjectedCostLowPct:  low,
 			ProjectedCostHighPct: high,
+			NetPnlPct:            -projected, // flip sign so positive = gain
 			Paying:               projected > 0,
 		})
 	}
@@ -122,6 +124,19 @@ func (h *RecommendHandler) GetRecommendation(c fiber.Ctx) error {
 		"bid_depth": w.BidDepth,
 	}
 
+	// --- 5. Generate summary ---
+	bestExchange := rankings[0]
+	bestFunding := fundingCosts[0] // already sorted cheapest first
+	summary := fmt.Sprintf(
+		"Best for your %.0f-hour $%.0f %s: %s (score %.2f, funding cost %.3f%%)",
+		hours,
+		size,
+		side,
+		bestExchange.Exchange,
+		bestExchange.CompositeScore,
+		bestFunding.ProjectedCostPct,
+	)
+
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"request": fiber.Map{
 			"pair":          pair,
@@ -129,6 +144,7 @@ func (h *RecommendHandler) GetRecommendation(c fiber.Ctx) error {
 			"position_usdt": size,
 			"hold_hours":    hours,
 		},
+		"summary":       summary, // NEW
 		"weights_used":  weightsUsed,
 		"rankings":      rankings,
 		"funding_costs": fundingCosts,

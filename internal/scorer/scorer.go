@@ -254,16 +254,17 @@ func (s *Scorer) ScoreAll(rawData []*models.RawExchangeData, positionSize float6
 	}
 
 	var weights ScoreWeights
+	var weightsSource string
 	if hours > 0 {
-		// Duration + size supplied — derive weights dynamically
 		weights = DeriveWeights(side, hours, positionSize)
+		weightsSource = "dynamic"
 	} else {
-		// Explicit mode supplied — use static profile
 		var ok bool
 		weights, ok = weightProfiles[mode]
 		if !ok {
 			weights = weightProfiles[ModeGeneral]
 		}
+		weightsSource = "static"
 	}
 
 	// Resolve the effective order book side to walk.
@@ -271,7 +272,7 @@ func (s *Scorer) ScoreAll(rawData []*models.RawExchangeData, positionSize float6
 
 	scores := make([]*models.ExchangeScore, 0, len(rawData))
 	for _, raw := range rawData {
-		scores = append(scores, scoreFromRaw(raw, positionSize, effectiveSide, string(mode)))
+		scores = append(scores, scoreFromRaw(raw, positionSize, effectiveSide, string(mode), weightsSource))
 	}
 
 	normalizeVolume(scores)
@@ -816,7 +817,7 @@ func fetchRawData(ctx context.Context, ex exchange.Exchange, pair string) (*mode
 }
 
 // scoreFromRaw computes an ExchangeScore from raw data. Pure computation — no API calls.
-func scoreFromRaw(raw *models.RawExchangeData, positionSize float64, side string, mode string) *models.ExchangeScore {
+func scoreFromRaw(raw *models.RawExchangeData, positionSize float64, side string, mode string, weightsSource string) *models.ExchangeScore {
 	spreadPct := 0.0
 	if raw.Spread.Bid > 0 && raw.Spread.Ask > 0 && raw.Spread.Ask > raw.Spread.Bid {
 		spreadPct = (raw.Spread.Spread / raw.Spread.Bid) * 100
@@ -831,19 +832,20 @@ func scoreFromRaw(raw *models.RawExchangeData, positionSize float64, side string
 	slippagePct := estimateSlippage(levels, raw.Depth.MidPrice, positionSize)
 
 	return &models.ExchangeScore{
-		Exchange:     raw.Exchange,
-		Pair:         raw.Pair,
-		Side:         side,
-		Mode:         mode,
-		FundingRate:  raw.Funding.Rate,
-		SpreadPct:    spreadPct,
-		RawBidDepth:  raw.Depth.BidDepth,
-		RawAskDepth:  raw.Depth.AskDepth,
-		SlippagePct:  slippagePct,
-		Volume24h:    raw.Stats.Volume24h,
-		OpenInterest: raw.Stats.OpenInterest,
-		PositionSize: positionSize,
-		UpdatedAt:    raw.FetchedAt,
+		Exchange:      raw.Exchange,
+		Pair:          raw.Pair,
+		Side:          side,
+		Mode:          mode,
+		WeightsSource: weightsSource,
+		FundingRate:   raw.Funding.Rate,
+		SpreadPct:     spreadPct,
+		RawBidDepth:   raw.Depth.BidDepth,
+		RawAskDepth:   raw.Depth.AskDepth,
+		SlippagePct:   slippagePct,
+		Volume24h:     raw.Stats.Volume24h,
+		OpenInterest:  raw.Stats.OpenInterest,
+		PositionSize:  positionSize,
+		UpdatedAt:     raw.FetchedAt,
 	}
 }
 

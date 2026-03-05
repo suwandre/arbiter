@@ -125,6 +125,7 @@ type ExchangeScore struct {
 	Pair           string    `json:"pair"`
 	Side           string    `json:"side"` // "long", "short", or "general"
 	Mode           string    `json:"mode"`
+	WeightsSource  string    `json:"weights_source"` // NEW: "static" or "dynamic"
 	FundingRate    float64   `json:"funding_rate"`
 	SpreadPct      float64   `json:"spread_pct"`
 	RawBidDepth    float64   `json:"raw_bid_depth"`
@@ -175,6 +176,7 @@ type FundingResult struct {
 	ProjectedCostPct     float64 `json:"projected_cost_pct"`      // based on 30d avg
 	ProjectedCostLowPct  float64 `json:"projected_cost_low_pct"`  // optimistic: avg - 1 std dev
 	ProjectedCostHighPct float64 `json:"projected_cost_high_pct"` // pessimistic: avg + 1 std dev
+	NetPnlPct            float64 `json:"net_pnl_pct"`             // this is the negative of projected_cost. (positive = you gain)
 	Paying               bool    `json:"paying"`                  // true if net cost (not receiving)
 }
 
@@ -189,6 +191,7 @@ type RecommendRequest struct {
 // RecommendResult is the unified response for /v1/recommend.
 type RecommendResult struct {
 	Request      RecommendRequest   `json:"request"`
+	Summary      string             `json:"summary"`
 	WeightsUsed  map[string]float64 `json:"weights_used"`  // what the engine derived
 	Rankings     []*ExchangeScore   `json:"rankings"`      // ranked exchanges
 	FundingCosts []FundingResult    `json:"funding_costs"` // projected cost over hold period
