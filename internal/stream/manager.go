@@ -224,15 +224,15 @@ func (m *Manager) runOrderBookStream(ctx context.Context, ex exchange.StreamingE
 				m.mu.Unlock()
 
 				m.wsMu.Lock()
-				m.wsStatus[ex.Name()] = true
+				m.wsStatus[ex.Name()] = true // stream is alive
 				m.wsMu.Unlock()
 				wait = reconnectBaseWait
-
-				m.wsMu.Lock()
-				m.wsStatus[ex.Name()] = false
-				m.wsMu.Unlock()
 			}
 		}
+
+		m.wsMu.Lock()
+		m.wsStatus[ex.Name()] = false // stream just died
+		m.wsMu.Unlock()
 
 		// Stream died — reconnect with backoff
 		log.Warn().
