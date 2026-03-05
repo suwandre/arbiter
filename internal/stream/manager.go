@@ -18,8 +18,6 @@ const (
 
 // Manager maintains live RawExchangeData per pair+exchange using WS streams
 // for order book and ticker, and periodic REST calls for funding/stats/spot.
-// It exposes the same GetRawData interface as the old Scheduler so all
-// existing handlers work with zero changes.
 type Manager struct {
 	exchanges []exchange.StreamingExchange
 	pairs     []string
@@ -119,7 +117,6 @@ func (m *Manager) Stop() {
 }
 
 // GetRawData returns a snapshot of the current live state for a pair.
-// Same signature as scheduler.Scheduler.GetRawData — drop-in replacement.
 func (m *Manager) GetRawData(pair string) ([]*models.RawExchangeData, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
