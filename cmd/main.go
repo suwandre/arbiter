@@ -55,6 +55,11 @@ func main() {
 		"BTCUSDT",
 		"ETHUSDT",
 		"SOLUSDT",
+		"BNBUSDT",
+		"TRXUSDT",
+		"XRPUSDT",
+		"DOGEUSDT",
+		"ADAUSDT",
 	})
 
 	manager.Start(ctx)
