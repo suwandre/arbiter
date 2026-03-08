@@ -75,7 +75,10 @@ func main() {
 
 	// ── 6b. CORS
 	app.Use(cors.New(cors.Config{
-		AllowOrigins: []string{"http://localhost:3000"}, // temporarily allowing localhost
+		AllowOrigins: []string{
+			"http://localhost:3000", // to be deleted.
+			"https://arbiter-scanner.vercel.app",
+		},
 		AllowMethods: []string{"GET", "POST", "OPTIONS"},
 		AllowHeaders: []string{"Origin", "Content-Type", "Accept"},
 	}))
