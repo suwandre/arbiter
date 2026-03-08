@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/gofiber/fiber/v3/middleware/cors"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/suwandre/arbiter/api"
@@ -72,9 +73,15 @@ func main() {
 		WriteTimeout: 10 * time.Second,
 	})
 
+	// ── 6b. CORS
+	app.Use(cors.New(cors.Config{
+		AllowOrigins: []string{"http://localhost:3000"}, // temporarily allowing localhost
+		AllowMethods: []string{"GET", "POST", "OPTIONS"},
+		AllowHeaders: []string{"Origin", "Content-Type", "Accept"},
+	}))
+
 	// ── 7. Routes
 	api.SetupRoutes(app, manager, sc)
-
 	// ── 8. Graceful shutdown listener
 	go func() {
 		<-ctx.Done()
